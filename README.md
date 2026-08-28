@@ -49,11 +49,18 @@ Vaga de alta relevância chega na hora, com motivo da aprovação, nível e link
 
 ## 🗂️ Sumário
 
-- [Como funciona (pipeline)](#-como-funciona-pipeline)
-- [Arquitetura técnica](#%EF%B8%8F-arquitetura-técnica)
-- [Estrutura do repositório](#-estrutura-do-repositório)
-- [Como rodar](#-como-rodar)
-- [Testes](#-testes)
+- [📡 JobRadar](#-jobradar)
+    - [Monitor Automatizado de Vagas de Dados \& BI](#monitor-automatizado-de-vagas-de-dados--bi)
+  - [💎 Proposta de valor](#-proposta-de-valor)
+  - [📄 Resumo executivo](#-resumo-executivo)
+  - [📸 Como chega pra você](#-como-chega-pra-você)
+  - [🗂️ Sumário](#️-sumário)
+  - [🧭 Como funciona (pipeline)](#-como-funciona-pipeline)
+  - [🏗️ Arquitetura técnica](#️-arquitetura-técnica)
+  - [📁 Estrutura do repositório](#-estrutura-do-repositório)
+  - [💻 Como rodar](#-como-rodar)
+    - [Com docker](#com-docker)
+  - [🧪 Testes](#-testes)
 
 ---
 
@@ -101,6 +108,19 @@ obradar/
 └── testes.yml ← CI
 
 ## 💻 Como rodar
+Criar `.env` na raiz com as variáveis abaixo (via [@BotFather](https://t.me/BotFather)), depois:
+```properties
+PERFIL=internacional
+FLAGS=--once
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+```
+
+### Com docker
+```bash
+docker compose up
+```
+ou
 
 ```bash
 git clone <repo>
@@ -110,7 +130,6 @@ pip install -r requirements.txt
 python -m playwright install chromium
 ```
 
-Criar `.env` na raiz com `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID` (via [@BotFather](https://t.me/BotFather)), depois:
 
 ```bash
 python main.py --perfil brasil internacional --once

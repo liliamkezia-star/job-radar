@@ -8,3 +8,5 @@ data/*.db-journal
 data/*.db-wal
 data/*.db-shm
 _to_delete/
+
+data/.*db
