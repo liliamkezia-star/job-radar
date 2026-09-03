@@ -216,6 +216,41 @@ _SCRAPERS_BR = [
     # Critério de permanência, pra decidir por número e não por impressão
     # (mesmo critério que manteve o 99Jobs e tirou o Trampos): se numa semana
     # não trouxer vaga relevante das 8 cidades, sai.
+    #
+    # ---- VEREDITO PARCIAL, 03/09 (15 dias no ar, ZERO vaga no banco) ----
+    #
+    # O critério acima já venceu. Antes de remover, foi diagnosticado, porque
+    # "não rende" e "está quebrada" pedem decisões opostas. MEDIDO: num ciclo
+    # completo ela trouxe 1.847 vagas brutas e 0 passaram no filtro.
+    #
+    # A FONTE NÃO ESTÁ QUEBRADA. O mapeamento sai correto e as vagas são de
+    # Dados de verdade:
+    #
+    #   Analista Engenharia de Dados Sênior      Igrejinha - RS         Híbrido
+    #   ANALISTA POWER BI JR                     Ituiutaba/Canápolis-MG
+    #   ANALISTA DE BUSINESS INTELLIGENCE PLENO  Goiânia                Presencial
+    #   ANALISTA CIÊNCIA E ARQ DADOS PL          Ponta Grossa - PR      Presencial
+    #
+    # Elas caem por CIDADE. A Senior tem vaga em Porto Alegre, Maringá,
+    # Blumenau, Veranópolis, Lajeado, Pelotas, Goiânia, Cuiabá, Ituiutaba --
+    # nenhuma das nove aceitas. A base de clientes dela é Sul/Sudeste; o mapa
+    # deste projeto é Nordeste mais Manaus. É incompatibilidade estrutural,
+    # não defeito.
+    #
+    # A única vaga REMOTA da sondagem (Business Analyst II (CIGAM), Pelotas,
+    # Remoto) foi rejeitada CORRETAMENTE: 'Business Analyst' é keyword ambígua
+    # e exige qualificador de dados no título. A mesma vaga como 'Business
+    # Analyst - Dados' passa. O filtro está certo.
+    #
+    # DECISÃO DA USUÁRIA: manter mais 15 dias, até 18/09. Custa ~30s por
+    # ciclo, e a aposta é vaga REMOTA -- remoto no Brasil vale em qualquer
+    # lugar, e a sondagem confirmou que a Senior publica vaga remota.
+    # Se em 18/09 continuar zero, sai sem discussão.
+    #
+    # O QUE MUDARIA O VEREDITO: se as cidades aceitas passarem a incluir
+    # Sul/Sudeste, esta fonte vira boa da noite pro dia -- ela já enxerga um
+    # volume de vaga de Dados que o projeto hoje descarta por geografia.
+    # Sondagem que produziu tudo isto: testar_senior.py.
     DefinicaoScraper(SeniorScraper, FREQUENCIA_BAIXA),      # 0,3%, mas 4s e cobre cidade
 ]
 
