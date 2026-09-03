@@ -7,7 +7,7 @@
 ![Playwright](https://img.shields.io/badge/Playwright-Scraping-2EAD33?style=for-the-badge&logo=playwright&logoColor=white)
 ![SQLite](https://img.shields.io/badge/SQLite-Banco%20versionado-07405E?style=for-the-badge&logo=sqlite&logoColor=white)
 ![GitHub Actions](https://img.shields.io/badge/GitHub%20Actions-Cron-2088FF?style=for-the-badge&logo=githubactions&logoColor=white)
-![Tests](https://img.shields.io/badge/testes-561%20passing-success?style=for-the-badge)
+![Tests](https://img.shields.io/badge/testes-573%20passing-success?style=for-the-badge)
 ![Status](https://img.shields.io/badge/status-em%20produção-success?style=for-the-badge)
 
 **Autora:** Liliam Kezia Oliveira Souza
@@ -22,16 +22,16 @@
 
 ## 📄 Resumo executivo
 
-Entre 07 e 31 de agosto de 2026, o sistema processou **2.371 vagas únicas** sem intervenção manual.
+Entre 07 de agosto e 1º de setembro de 2026, o sistema processou **2.437 vagas únicas** sem intervenção manual.
 
 | Indicador | Número |
 |---|---|
-| 📊 Vagas processadas (deduplicadas) | **2.371** |
-| 🧪 Testes automatizados (CI a cada push) | **561** |
+| 📊 Vagas processadas (deduplicadas) | **2.437** |
+| 🧪 Testes automatizados (CI a cada push) | **573** |
 | 🌎 Fontes monitoradas | **9** |
 | 🏙️ Cidades-alvo + remoto | **9 + remoto** |
 | ⏱️ Frequência de checagem | **a cada 3h** |
-| 🔗 Concentração numa única fonte (LinkedIn) | **93,5%** ⚠️ |
+| 🔗 Concentração numa única fonte (LinkedIn) | **93,4%** ⚠️ |
 | 💰 Custo de infraestrutura | **R$ 0** |
 
 A concentração em LinkedIn está documentada como **risco**, não como conquista: o endpoint usado não é oficial, e o sistema perde quase todo o alcance se ele mudar ou bloquear. Ver [Limites conhecidos](#-limites-conhecidos).
@@ -104,8 +104,8 @@ Vaga de alta relevância chega na hora, com nível, data de publicação e link.
 - **Filtro em 3 níveis de confiança:** cargo inequívoco passa sozinho; cargo ambíguo (ex: `Analyst`) só conta com um qualificador de dados junto no título; ferramenta (ex: `Power BI`) só conta com palavra de cargo junto. Nada aprova por palavra solta — é o que segura `Financial Analyst` e `HR Analyst` fora do radar.
 - **Score de relevância sem ML:** 5 sinais conhecidos, pesos calibrados contra o histórico real do banco. Conjunto pequeno e conhecido não precisa de modelo — precisa de critério explicável.
 - **Zero infraestrutura:** GitHub Actions como motor de cron, SQLite como banco versionado no próprio Git. O histórico de vagas já vistas *é* o commit.
-- **Resiliente:** nunca marca vaga como vista sem confirmar que a notificação saiu; alerta se a maioria das fontes falhar num ciclo; heartbeat diário confirmando que o robô está de pé; e uma segunda passada no fim do ciclo que repete as buscas que voltaram vazias — medida, não intuída (ver Limites conhecidos).
-- **561 testes em CI:** cada caso documenta um bug real já corrigido nesta base — inclusive os que ainda não foram corrigidos, fixados como comportamento conhecido em vez de escondidos.
+- **Resiliente:** nunca marca vaga como vista sem confirmar que a notificação saiu; alerta se a maioria das fontes falhar num ciclo; heartbeat diário confirmando que o robô está de pé; e uma segunda passada no fim do ciclo — no LinkedIn e na Sólides — que repete só as buscas que voltaram vazias. Ela se mede sozinha no log e carrega no código o critério que a mata, escrito antes do primeiro resultado (ver Limites conhecidos).
+- **573 testes em CI:** cada caso documenta um bug real já corrigido nesta base — inclusive os que ainda não foram corrigidos, fixados como comportamento conhecido em vez de escondidos.
 
 ## 📋 Regras de negócio
 
@@ -134,7 +134,7 @@ JobRadar/
 ├── notifier/
 │   └── telegram.py              ← notificação individual, digest, botão 👍/👎
 ├── scrapers/                    ← um módulo por fonte
-├── tests/                       ← 561 casos, roda em CI a cada push
+├── tests/                       ← 573 casos, roda em CI a cada push
 ├── data/
 │   └── jobs.db                  ← banco versionado (histórico de dedup)
 └── .github/workflows/
@@ -171,7 +171,7 @@ JOBRADAR_DB_PATH=data/teste.db python main.py --perfil brasil --once
 pytest tests/ -v
 ```
 
-561 casos em 19 arquivos, cobrindo filtro, regras de negócio, paginação de cada fonte, datas de publicação e o relatório de precisão — todos rodando a cada push via GitHub Actions.
+573 casos em 19 arquivos, cobrindo filtro, regras de negócio, paginação de cada fonte, datas de publicação e o relatório de precisão — todos rodando a cada push via GitHub Actions.
 
 Os testes seguem uma convenção: **cada arquivo começa explicando o bug real que o motivou**, com o número medido. Um teste que só afirma que `2 + 2 = 4` não conta; o que conta é o que quebrou de verdade e como se descobriu.
 
@@ -181,9 +181,10 @@ Registrados de propósito — problema documentado é problema que alguém pode 
 
 | Limite | Situação |
 |---|---|
-| **93,5% das vagas vêm do LinkedIn** | Endpoint não oficial. Se mudar ou bloquear, o sistema perde quase todo o alcance. |
-| **Resposta instável do LinkedIn** | O endpoint guest às vezes serve a página e às vezes devolve vazio para a *mesma* busca. Medido em três rodadas: o mesmo par (termo × cidade) devolve 0 e 10 em horas diferentes, do mesmo IP. A primeira hipótese — bloqueio ao IP de datacenter do Actions — foi **derrubada**: o ciclo rodado em rede residencial deu 22 buscas vazias contra 13 do Actions. Repetir na hora (5s/10s/30s) recuperou 0 de 13; o rodízio de termos recupera 12 de 22 sozinho. Mitigação atual: repetir no fim do ciclo, que se mede sozinha no log. |
+| **93,4% das vagas vêm do LinkedIn** | Endpoint não oficial. Se mudar ou bloquear, o sistema perde quase todo o alcance. |
+| **Resposta instável do LinkedIn** | O endpoint guest às vezes serve a página e às vezes devolve vazio para a *mesma* busca. Medido em três rodadas: o mesmo par (termo × cidade) devolve 0 e 10 em horas diferentes, do mesmo IP. A primeira hipótese — bloqueio ao IP de datacenter do Actions — foi **derrubada**: o ciclo rodado em rede residencial deu 22 buscas vazias contra 13 do Actions. Repetir na hora (5s/10s/30s) recuperou 0 de 13; o rodízio de termos recupera 12 de 22 sozinho. Mitigação atual: repetir no fim do ciclo. **Medida em produção, 4 ciclos:** recuperou 43, 25, 94 e 27 vagas inéditas — buscas que o ciclo teria dado como vazias. Custo: ~25 requisições extras em ~375, cerca de 2 minutos. |
 | **Fontes secundárias rendem pouco** | Catho, GeekHunter e 99Jobs somam menos de 3% das vagas. Funcionam — só não têm volume no nicho buscado. Mantidas porque o critério de remoção é estar quebrada, não render pouco. |
+| **A API da Sólides também mente** | `count = 0` na primeira página faz a paginação parar, e esse zero nem sempre é verdade: num ciclo a fonte caiu de ~400 para 70 vagas, e minutos depois a mesma API respondia 209, 133 e 516 vagas para os termos que tinham voltado zero. No dia seguinte foram nove respostas **504**, quase todas já na página 1 — um erro ali não custa uma busca, custa o termo inteiro. Mitigado pela mesma segunda passada, que repete termo com `count = 0`, erro de rede, status ≠ 200 ou resposta não-JSON. |
 | **O filtro lê só o título** | Vaga de BI com nome comercial (ex: "Analista Comercial" com Power BI na descrição) escapa. É o preço de manter o ruído perto de zero, e está instrumentado no log para virar decisão com número. |
 | **Ruído aceito conscientemente** | `Data Center Operations Analyst` passa, porque "data center" casa o qualificador "data". Não apareceu nas amostras medidas; está fixado em teste para quando incomodar. |
 
