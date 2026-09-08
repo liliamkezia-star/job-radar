@@ -1,5 +1,8 @@
 from datetime import date, datetime, timezone
+import json
+import re
 import time
+import unicodedata
 
 import requests
 
@@ -9,79 +12,173 @@ from scrapers.base import BaseScraper
 
 logger = get_logger()
 
-# API que o proprio portal da Solides chama pra montar a busca.
+# COMO A SOLIDES E LIDA HOJE, E POR QUE MUDOU (07-08/09/2026).
 #
-# MEDIDO (2026-08-29): o scraper anterior abria um NAVEGADOR e raspava HTML
-# com "li:has(h2 a)", lendo 3 paginas de 10 = teto de 30 vagas por termo, e
-# levava ~7 minutos por ciclo (45 cargas de pagina). Esta API responde, pro
-# mesmo termo "analista de dados":
+# Ate 07/09 este scraper chamava a API que o portal usava:
 #
-#     {"data": {"count": 205, "totalPages": 21}}
+#     apigw.solides.com.br/jobs/v3/portal-vacancies-new
 #
-# 205 contra 30. Mesma historia da Gupy: a fonte sempre teve volume, o
-# scraper e que so via o comeco.
+# Ela foi APOSENTADA. Passou a responder 403 com
+# {"message":"Missing Authentication Token"} -- mensagem do AWS API Gateway
+# pra rota que nao existe. MEDIDO de tres lugares, pra descartar as causas
+# faceis antes de reconstruir qualquer coisa:
 #
-# O que a troca resolve, alem do alcance:
-#   - paginacao deixa de ser adivinhada CONTANDO cards (mecanismo que ja
-#     produziu alarme falso aqui, ver 9520409). A resposta declara count e
-#     totalPages.
-#   - state.code vem com a SIGLA pronta ("ES"), melhor que a Gupy, que da o
-#     estado por extenso.
-#   - createdAt ja vem em AAAA-MM-DD, o formato que Job.publicacao_antiga
-#     espera.
-#   - sem navegador: nada de seletor pra quebrar, e o ciclo encurta muito.
+#   · do IP de datacenter do GitHub Actions ............. 403
+#   · do IP residencial, com 4 variacoes de cabecalho ... 403
+#   · de DENTRO da pagina do portal, num Chrome com a
+#     sessao do site (mesma origem, mesmos cookies) ..... 403
 #
-# O QUE NAO MUDOU, de proposito: o Job montado, o filtro, a pontuacao, a
-# deduplicacao e o formato do log. So a camada de busca foi trocada.
-URL_API = "https://apigw.solides.com.br/jobs/v3/portal-vacancies-new"
+# Nao era IP, nao era cabecalho, nao era cookie: a porta foi fechada. O
+# portal foi refeito em Next.js com rotas novas (/vagas/<termo>/todas), e
+# nao chama mais aquele endpoint -- 118 requisicoes capturadas em varios
+# carregamentos, nenhuma pro apigw.
+#
+# O QUE SALVOU A FONTE: o portal novo entrega as vagas no HTML da propria
+# pagina, dentro dos blocos RSC do Next.js (self.__next_f.push), e com os
+# MESMOS NOMES DE CAMPO da API velha:
+#
+#     {"id":917373,"title":"...","companyName":"OPEN LABS S.A.",
+#      "state":{"name":"Rio de Janeiro","code":"RJ"},"city":{...},
+#      "jobType":...,"homeOffice":...,"createdAt":...,"redirectLink":...}
+#
+# Por isso montar_job, montar_local, montar_modalidade e pagina_toda_antiga
+# continuam valendo SEM UMA LINHA de mudanca, com os testes que ja tinham.
+# Trocou so a camada que busca e extrai.
+#
+# E continua SEM NAVEGADOR: o HTML cru ja traz tudo, entao o ciclo nao volta
+# aos ~7 minutos do Playwright, que foi de onde a gente saiu em 29/08.
+#
+# ALCANCE CONFERIDO contra a API velha, mesmo termo:
+#     analista de dados ... 209 (API) -> 204 (portal novo)
+#     power bi ............ 516 (API) -> 502 (portal novo)
+#
+# O RISCO, dito com todas as letras: bloco RSC e detalhe interno do Next.js
+# e pode mudar sem aviso -- e menos estavel que uma API documentada. A
+# mitigacao esta em extrair_vagas(): quando o formato muda, ela grita no log
+# em vez de devolver zero em silencio. Zero silencioso foi exatamente o erro
+# que custou uma semana de diagnostico nesta base.
+URL_BASE = "https://vagas.solides.com.br/vagas"
 
-# MEDIDO: take so aceita 10. Testado com 20, 30, 50, 60 e 100 -- todos
-# devolvem count=0, nao so lista vazia. O tamanho de pagina e fixo.
-TAKE = 10
+# MEDIDO: o portal novo entrega 14 vagas por pagina (a API velha dava 10).
+POR_PAGINA = 14
+
+
+def slug_do_termo(termo: str) -> str:
+    """'Inteligência de Mercado' -> 'inteligencia-de-mercado'.
+
+    A rota do portal e /vagas/<slug>/todas. Sem acento, sem espaco.
+    """
+    texto = unicodedata.normalize("NFD", (termo or "").strip().lower())
+    texto = "".join(c for c in texto if unicodedata.category(c) != "Mn")
+    return re.sub(r"[^a-z0-9]+", "-", texto).strip("-")
+
+
+def url_da_busca(termo: str, pagina: int) -> str:
+    url = f"{URL_BASE}/{slug_do_termo(termo)}/todas"
+    return url if pagina <= 1 else f"{url}?page={pagina}"
+
+
+# Os blocos que o Next.js usa pra mandar os dados junto com o HTML. Cada um
+# carrega um literal de string JSON; o conteudo de verdade so aparece depois
+# de desescapar.
+_BLOCO_RSC = re.compile(r'self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)')
+
+# Onde uma lista de objetos comeca dentro do payload ja desescapado. De
+# proposito NAO procura chave nenhuma pelo nome: assim a extracao sobrevive a
+# eles renomearem ou reordenarem campo, que e a mudanca mais provavel. Quem
+# decide se a lista e de vagas e a validacao abaixo (precisa ter id e title).
+_INICIO_DE_LISTA = re.compile(r'\[\s*\{\s*"')
+
+
+def _payload_desescapado(html: str) -> str:
+    """Junta e desescapa os blocos RSC. Vazio quando nao ha bloco nenhum."""
+    partes = []
+    for literal in _BLOCO_RSC.findall(html or ""):
+        try:
+            partes.append(json.loads(literal))
+        except ValueError:
+            continue
+    return "".join(partes)
+
+
+def _lista_de_vagas(payload: str) -> list[dict]:
+    """A maior lista de objetos com id e title. Varre todas as candidatas em vez
+    de confiar numa ancora fixa -- a pagina traz varias listas (filtros, links,
+    empresas) e a das vagas e a maior que passa na validacao."""
+    decodificador = json.JSONDecoder()
+    melhor: list[dict] = []
+    for achado in _INICIO_DE_LISTA.finditer(payload):
+        try:
+            valor, _ = decodificador.raw_decode(payload, achado.start())
+        except ValueError:
+            continue
+        if not isinstance(valor, list):
+            continue
+        vagas = [v for v in valor
+                 if isinstance(v, dict) and v.get("id") and v.get("title")]
+        if len(vagas) > len(melhor):
+            melhor = vagas
+    return melhor
+
+def extrair_vagas(html: str, termo: str = "") -> list[dict]:
+    """Tira a lista de vagas do HTML do portal novo.
+
+    GRITA quando nao acha. A diferenca entre 'esta pagina nao tem vaga' e 'o
+    formato mudou e eu nao sei mais ler' e a coisa mais importante deste
+    arquivo: confundir as duas foi o que fez a fonte cair de 400 pra 70 vagas
+    sem ninguem perceber, em 01/09.
+    """
+    payload = _payload_desescapado(html)
+    if not payload:
+        logger.error(
+            f"[Solides] Nenhum bloco RSC no HTML de '{termo}' — o portal mudou "
+            "de tecnologia, ou a resposta não é a página de vagas. "
+            "Isto NÃO é busca vazia."
+        )
+        return []
+
+    vagas = _lista_de_vagas(payload)
+    if not vagas and '"companyName"' in payload:
+        logger.error(
+            f"[Solides] Achei bloco RSC com dados de vaga em '{termo}', mas não "
+            "consegui ler a lista — o formato do payload mudou. Isto NÃO é "
+            "busca vazia; ver _lista_de_vagas em scrapers/solides.py."
+        )
+    return vagas
+
+
+def total_de_vagas(html: str) -> int | None:
+    """Quantas vagas o portal diz existir pro termo. None quando não declara."""
+    achado = re.search(r'"count"\s*:\s*(\d+)', _payload_desescapado(html))
+    return int(achado.group(1)) if achado else None
 
 # ONDE PARAR DE PAGINAR.
 #
-# A primeira versao usava teto fixo de 15 paginas, escolhido porque o unico
-# termo que eu tinha medido tinha 21. Ao ver "power bi: 523 vagas em 53
-# paginas, lidas as 15 primeiras" no log, minha leitura foi que o teto estava
-# APERTADO e vaga estava sendo perdida.
+# MEDIDO (30/08), sondando os 45 termos do perfil BR: nenhum termo passa da
+# pagina 7 antes das vagas ficarem com mais de uma semana. O teto fixo de 15
+# paginas que existia antes nunca cortou vaga nova -- ele lia 9 paginas a
+# mais de vaga VELHA. Estava frouxo, nao apertado.
 #
-# MEDIDO (30/08), sondando os 45 termos do perfil BR: era o contrario.
-#
-#   termo                 vagas  pags   pagina em que a vaga passa de 7 dias
-#   sql                     642    65          7
-#   power bi                523    53          6
-#   python                  347    35          5
-#   analista de dados       205    21          4
-#   business intelligence   138    14          3
-#
-# NENHUM termo passa da pagina 7 antes das vagas ficarem com mais de uma
-# semana. O teto de 15 nunca cortou vaga nova -- ele lia 9 paginas a mais de
-# vaga VELHA. Estava frouxo, nao apertado.
-#
-# Por isso o criterio deixou de ser "quantas paginas" e passou a ser "ate
-# quando". A lista vem da mais recente pra mais antiga, entao basta parar
-# quando as vagas ficarem velhas demais pra interessar. Custo medido, em
-# requisicoes por termo:
+# Por isso o criterio nao e "quantas paginas" e sim "ate quando". A lista vem
+# da mais recente pra mais antiga, entao basta parar quando as vagas ficarem
+# velhas demais. Custo medido, em requisicoes por termo:
 #
 #     teto fixo de 15 paginas   4,6
 #     parar apos  7 dias        2,2
 #     parar apos 14 dias        3,0
 #     parar apos 30 dias        4,8   <- escolhido
 #
-# 30 dias custa praticamente o mesmo que o teto de hoje, mas distribui muito
-# melhor: le fundo onde ha volume novo (power bi vai ate a pagina 18) e sai
-# na pagina 2 onde o termo e parado. E se adapta sozinho quando o mercado
-# muda, sem precisar recalibrar numero nenhum.
+# 30 dias e tambem o limiar de Job.publicacao_antiga: alem disso a vaga ja
+# ganharia o aviso de "pode ja estar preenchida" e sairia do alerta imediato.
+# Ler mais fundo seria buscar o que o filtro desprioriza.
 #
-# 30 dias tambem e o limiar que Job.publicacao_antiga ja usa -- vaga mais
-# velha que isso ganha o aviso de "pode ja estar preenchida" e sai do alerta
-# imediato. Ler alem disso seria buscar exatamente o que o filtro desprioriza.
+# NOTA 08/09: estes numeros foram medidos na API antiga, que dava 10 vagas
+# por pagina. O portal novo da 14, entao cada pagina cobre mais dias e o
+# custo por termo tende a CAIR. O criterio nao muda; so fica mais barato.
 DIAS_PARA_PARAR = 30
 
-# Trava de seguranca, nao criterio: impede laco infinito se a API passar a
-# devolver data invalida ou parar de ordenar por data. O termo mais fundo
-# medido (sql) precisa de 19 paginas pra passar de 30 dias.
+# Trava de seguranca, nao criterio: impede laco infinito se o portal passar a
+# devolver data invalida ou parar de ordenar por data.
 MAX_PAGINAS = 30
 
 PAUSA_ENTRE_PAGINAS = 0.5
@@ -277,15 +374,14 @@ class SolidesScraper(BaseScraper):
         logger.info(f"[Solides] Buscando: {termo}")
         vagas: list[Job] = []
         total_paginas = None
-        total = None
 
         for pagina in range(1, MAX_PAGINAS + 1):
+            url = url_da_busca(termo, pagina)
             try:
                 resposta = requests.get(
-                    URL_API,
-                    params={"title": termo, "take": TAKE, "page": pagina},
+                    url,
                     timeout=TIMEOUT,
-                    headers={"User-Agent": UA, "Accept": "application/json"},
+                    headers={"User-Agent": UA, "Accept": "text/html"},
                 )
             except Exception as erro:
                 logger.error(f"[Solides] Erro ao buscar '{termo}' (página {pagina}): {erro}")
@@ -295,34 +391,29 @@ class SolidesScraper(BaseScraper):
             if resposta.status_code != 200:
                 logger.warning(
                     f"[Solides] Status {resposta.status_code} em '{termo}' "
-                    f"(página {pagina}) — resposta inesperada da API, não é busca vazia."
+                    f"(página {pagina}) — resposta inesperada do portal, não é busca vazia."
                 )
                 self._anotar_incompleto(termo)
                 break
 
-            try:
-                corpo = resposta.json()
-            except ValueError:
-                logger.warning(f"[Solides] Resposta não-JSON em '{termo}' (página {pagina}).")
-                self._anotar_incompleto(termo)
-                break
-
-            dados = corpo.get("data") or {}
-            lote = dados.get("data") or []
+            lote = extrair_vagas(resposta.text, termo)
 
             if total_paginas is None:
-                total = dados.get("count", 0)
-                total_paginas = dados.get("totalPages", 0)
-                if not total:
-                    # MEDIDO 01/09: count=0 aqui NAO quer dizer "nao ha vaga".
-                    # A API devolveu 0 pra 'analista de dados' num ciclo e 209
-                    # minutos depois. Anota pra segunda passada, e o texto
-                    # deixou de afirmar o que nao da pra saber.
+                # O portal declara o total; as paginas saem dele. Quando nao
+                # declara, o laco para sozinho na primeira pagina sem vaga.
+                total = total_de_vagas(resposta.text)
+                if total:
+                    total_paginas = -(-total // POR_PAGINA)   # divisao pra cima
+                if not lote:
+                    # MEDIDO 01/09, e vale igual aqui: pagina sem vaga NAO quer
+                    # dizer "nao ha vaga". Anota pra segunda passada, e o texto
+                    # nao afirma o que nao da pra saber. Se o motivo tiver sido
+                    # formato mudado, extrair_vagas ja gritou no log acima.
                     self._anotar_incompleto(termo)
                     logger.info(
-                        f"[Solides] count=0 para '{termo}' — pode ser ausência "
-                        "de vaga ou resposta instável da API; medido, não dá pra "
-                        "distinguir (ver _segunda_passada)."
+                        f"[Solides] nenhuma vaga na página 1 de '{termo}' — pode "
+                        "ser ausência de vaga ou resposta instável do portal; "
+                        "medido, não dá pra distinguir (ver _segunda_passada)."
                     )
                     break
 
@@ -331,13 +422,14 @@ class SolidesScraper(BaseScraper):
                 if job is not None:
                     vagas.append(job)
 
-            if not lote or pagina >= total_paginas:
+            if not lote or (total_paginas and pagina >= total_paginas):
                 break
 
             if pagina_toda_antiga(lote, DIAS_PARA_PARAR):
                 logger.info(
-                    f"[Solides] '{termo}': parou na página {pagina} de {total_paginas} "
-                    f"— daqui pra frente só vaga com mais de {DIAS_PARA_PARAR} dias."
+                    f"[Solides] '{termo}': parou na página {pagina} de "
+                    f"{total_paginas or '?'} — daqui pra frente só vaga com mais "
+                    f"de {DIAS_PARA_PARAR} dias."
                 )
                 break
 

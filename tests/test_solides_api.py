@@ -188,74 +188,248 @@ def test_o_limite_bate_com_o_do_filtro():
     assert DIAS_PARA_PARAR == DIAS_PARA_PUBLICACAO_ANTIGA
 
 
-# ------------------- o aviso da trava (regressao de bug) -------------------
+# ============ o portal novo: RSC no HTML, sem API (08/09) ============
+#
+# A API foi aposentada (403 "Missing Authentication Token" de tres lugares
+# diferentes, inclusive de dentro da pagina do portal). O portal novo entrega
+# as vagas no HTML, dentro de blocos self.__next_f.push do Next.js, com os
+# MESMOS nomes de campo -- por isso os testes de montar_job acima nao mudaram
+# uma linha.
+#
+# O trecho abaixo e REAL, capturado do portal em 08/09 e so encurtado.
+
+import json as _json
+
+_VAGA_RSC = {
+    "killerQuestions": [],
+    "id": 917373,
+    "title": "Gerente de RH (foco BP)",
+    "description": "$1e",
+    "currentState": "em_andamento",
+    "companyName": "OPEN LABS S.A.",
+    "state": {"id": 19, "name": "Rio de Janeiro", "code": "RJ"},
+    "city": {"id": 5564, "name": "Rio de Janeiro"},
+    "jobType": "presencial",
+    "homeOffice": False,
+    "createdAt": "2026-09-05",
+    "redirectLink": "https://openlabs.solides.jobs/vacancies/917373",
+}
 
 
-class _RespostaFalsa:
-    status_code = 200
+def _html(vagas, count=None, lixo_antes=True):
+    """Monta um HTML como o do portal: as vagas escapadas dentro de um bloco
+    RSC. O 'lixo antes' existe porque no portal real o bloco vem no meio de
+    muito outro conteudo."""
+    corpo = _json.dumps(vagas, ensure_ascii=False, separators=(",", ":"))
+    if count is not None:
+        corpo = '{"data":{"data":' + corpo + ',"count":' + str(count) + "}}"
+    literal = _json.dumps("2:" + corpo, ensure_ascii=False)
+    inicio = "<html><body><div>Vagas | Sólides</div>" if lixo_antes else ""
+    return f'{inicio}<script>self.__next_f.push([1,{literal}])</script></body></html>'
 
-    def __init__(self, corpo):
-        self._corpo = corpo
 
-    def json(self):
-        return self._corpo
+def _vagas(n, idade_em_dias=1):
+    dia = (HOJE - timedelta(days=idade_em_dias)).isoformat()
+    return [dict(_VAGA_RSC, id=900000 + i, createdAt=dia,
+                 redirectLink=f"https://x.solides.jobs/vacancies/{900000 + i}")
+            for i in range(n)]
 
 
-def _api_falsa(monkeypatch, idade_das_vagas, total_paginas):
-    """Finge a API da Solides: sempre responde uma pagina cheia de vagas com a
-    idade pedida, dizendo que existem `total_paginas` no total."""
-    def get(url, params=None, timeout=None, headers=None):
-        itens = [
-            dict(VAGA_API, createdAt=(HOJE - timedelta(days=idade_das_vagas)).isoformat())
-            for _ in range(10)
-        ]
-        return _RespostaFalsa({"data": {
-            "data": itens,
-            "count": total_paginas * 10,
-            "totalPages": total_paginas,
-        }})
+# ---------------------------- slug e rota ----------------------------
+
+@pytest.mark.parametrize("termo, esperado", [
+    ("analista de dados", "analista-de-dados"),
+    ("Power BI", "power-bi"),
+    ("inteligência de mercado", "inteligencia-de-mercado"),
+    ("BI & Analytics Analyst", "bi-analytics-analyst"),
+    ("  sql  ", "sql"),
+])
+def test_slug_do_termo(termo, esperado):
+    """A rota do portal é /vagas/<slug>/todas. Acento ou espaço que escape aqui
+    vira 404 silencioso, que o scraper leria como fonte fora do ar."""
+    assert solides.slug_do_termo(termo) == esperado
+
+
+def test_url_da_busca_pagina_1_nao_leva_query():
+    assert solides.url_da_busca("analista de dados", 1).endswith(
+        "/vagas/analista-de-dados/todas")
+    assert solides.url_da_busca("analista de dados", 3).endswith(
+        "/vagas/analista-de-dados/todas?page=3")
+
+
+# -------------------------- extrair do HTML --------------------------
+
+def test_extrai_as_vagas_do_bloco_rsc():
+    achadas = solides.extrair_vagas(_html([_VAGA_RSC]))
+    assert len(achadas) == 1
+    assert achadas[0]["title"] == "Gerente de RH (foco BP)"
+    assert achadas[0]["state"]["code"] == "RJ"
+
+
+def test_a_vaga_extraida_vira_um_job_pelo_mesmo_montar_job():
+    """O ponto da reconstrução: os nomes de campo não mudaram, então montar_job
+    e seus testes continuam valendo sem tocar em nada."""
+    job = montar_job(solides.extrair_vagas(_html([_VAGA_RSC]))[0])
+    assert job.titulo == "Gerente de RH (foco BP)"
+    assert job.local == "Rio de Janeiro - RJ"
+    assert job.modalidade == "Presencial"
+    assert job.publicado_em == "2026-09-05"
+    assert job.site == "Solides"
+
+
+def test_html_sem_bloco_rsc_GRITA_no_log(caplog):
+    """A diferença entre 'não tem vaga' e 'não sei mais ler' é a coisa mais
+    importante deste arquivo. Confundir as duas fez a fonte cair de 400 para 70
+    vagas sem ninguém perceber, em 01/09."""
+    with caplog.at_level(logging.ERROR, logger=solides.logger.name):
+        assert solides.extrair_vagas("<html><body>oi</body></html>", "x") == []
+    assert any("portal mudou" in r.message for r in caplog.records)
+
+
+def test_bloco_rsc_com_formato_desconhecido_tambem_GRITA(caplog):
+    """Há dado de vaga no payload, mas a lista não sai: formato mudou."""
+    quebrado = '<script>self.__next_f.push([1,"2:{\\"companyName\\":\\"X\\"}"])</script>'
+    with caplog.at_level(logging.ERROR, logger=solides.logger.name):
+        assert solides.extrair_vagas(quebrado, "x") == []
+    assert any("formato do payload mudou" in r.message for r in caplog.records)
+
+
+def test_pagina_de_verdade_sem_vaga_nao_grita(caplog):
+    """Bloco RSC existe e é legível, só não tem vaga: é busca vazia mesmo,
+    e não pode virar erro no log."""
+    with caplog.at_level(logging.ERROR, logger=solides.logger.name):
+        assert solides.extrair_vagas(_html([]), "x") == []
+    assert not caplog.records
+
+
+def test_nao_confunde_outra_lista_da_pagina_com_a_de_vagas():
+    """A página traz várias listas (filtros, cidades, empresas). O extrator pega
+    a MAIOR — então uma lista maior que a de vagas tem que ser descartada por
+    não ter id+title, senão o scraper monta Job de lixo.
+
+    Este teste existe porque a MUTAÇÃO encontrou o buraco: apagar a validação
+    de title não derrubava nenhum teste."""
+    iscas = [{"id": i, "nome": f"Cidade {i}"} for i in range(50)]   # sem title
+    import json as _j
+    corpo = ("2:" + _j.dumps({"cidades": iscas, "vagas": [_VAGA_RSC]},
+                             ensure_ascii=False, separators=(",", ":")))
+    html = ("<script>self.__next_f.push([1,"
+            + _j.dumps(corpo, ensure_ascii=False) + "])</script>")
+
+    achadas = solides.extrair_vagas(html, "x")
+    assert len(achadas) == 1
+    assert achadas[0]["title"] == "Gerente de RH (foco BP)"
+
+
+def test_le_o_total_declarado_pelo_portal():
+    assert solides.total_de_vagas(_html(_vagas(3), count=204)) == 204
+    assert solides.total_de_vagas(_html(_vagas(3))) is None
+
+
+# ---------------- o laço de páginas contra o portal novo ----------------
+
+class _RespostaHtml:
+    def __init__(self, texto, status=200):
+        self.status_code = status
+        self.text = texto
+
+
+def _portal_falso(monkeypatch, respostas):
+    """Finge o portal: uma resposta por página, na ordem."""
+    fila = list(respostas)
+    vistas = []
+
+    def get(url, timeout=None, headers=None):
+        vistas.append(url)
+        if not fila:
+            return _RespostaHtml(_html([]))
+        r = fila.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return r
 
     monkeypatch.setattr(solides.requests, "get", get)
     monkeypatch.setattr(solides.time, "sleep", lambda _: None)
+    return vistas
 
 
-def _avisou_da_trava(caplog):
-    return any("bateu a trava" in r.message for r in caplog.records)
+def _rodar(monkeypatch, respostas):
+    vistas = _portal_falso(monkeypatch, respostas)
+    s = solides.SolidesScraper(["analista de dados"])
+    s._incompletos = []
+    s._registrar_incompletos = True
+    achadas = s._buscar_termo("analista de dados")
+    return achadas, s._incompletos, vistas
 
 
-def test_parar_por_idade_nao_dispara_o_aviso_da_trava(monkeypatch, caplog):
-    """REGRESSAO. O aviso antigo perguntava "esse termo TEM mais paginas que a
-    trava?" em vez de "a trava foi atingida?". No ciclo de 30/08 'power bi'
-    parou certinho na pagina 18 de 53 POR IDADE -- que e o comportamento
-    correto -- e ainda assim saiu o aviso de que a trava tinha estourado.
-
-    Aqui: 53 paginas (bem mais que a trava), mas as vagas tem 90 dias, entao
-    a primeira pagina ja para por idade. Nao pode avisar nada."""
-    _api_falsa(monkeypatch, idade_das_vagas=90, total_paginas=53)
-    with caplog.at_level(logging.WARNING, logger=solides.logger.name):
-        solides.SolidesScraper(["power bi"]).buscar_vagas()
-    assert not _avisou_da_trava(caplog)
+def test_pagina_por_pagina_ate_o_total_declarado(monkeypatch):
+    """28 vagas em páginas de 14 = 2 páginas. Não pode pedir a terceira."""
+    cheia = _RespostaHtml(_html(_vagas(14), count=28))
+    achadas, _, vistas = _rodar(monkeypatch, [cheia, cheia])
+    assert len(achadas) == 28
+    assert len(vistas) == 2
+    assert vistas[1].endswith("?page=2")
 
 
-def test_estourar_a_trava_de_verdade_dispara_o_aviso(monkeypatch, caplog):
-    """O outro lado: vaga nova ate o fim e mais paginas do que a trava aguenta.
-    Ai a trava e realmente o motivo da parada, e o aviso e informacao."""
-    _api_falsa(monkeypatch, idade_das_vagas=1, total_paginas=53)
-    with caplog.at_level(logging.WARNING, logger=solides.logger.name):
-        solides.SolidesScraper(["power bi"]).buscar_vagas()
-    assert _avisou_da_trava(caplog)
+def test_para_por_idade_antes_de_esgotar_as_paginas(monkeypatch):
+    """Mesmo critério da versão anterior: a lista vem da mais nova pra mais
+    velha, então página toda velha significa que daqui pra frente só piora."""
+    nova = _RespostaHtml(_html(_vagas(14, idade_em_dias=1), count=999))
+    velha = _RespostaHtml(_html(_vagas(14, idade_em_dias=90), count=999))
+    achadas, _, vistas = _rodar(monkeypatch, [nova, velha, nova])
+    assert len(vistas) == 2
+    assert len(achadas) == 28
 
 
-def test_acabar_as_paginas_do_termo_nao_e_estourar_a_trava(monkeypatch, caplog):
-    """Termo pequeno: 2 paginas so, todas com vaga nova. Leu tudo que existia.
-    Nao ha nada a avisar."""
-    _api_falsa(monkeypatch, idade_das_vagas=1, total_paginas=2)
-    with caplog.at_level(logging.WARNING, logger=solides.logger.name):
-        solides.SolidesScraper(["power bi"]).buscar_vagas()
-    assert not _avisou_da_trava(caplog)
+def test_status_nao_200_marca_o_termo_como_incompleto(monkeypatch):
+    _, incompletos, _ = _rodar(monkeypatch, [_RespostaHtml("", status=403)])
+    assert incompletos == ["analista de dados"]
 
 
-# ------------- segunda passada: o count=0 que era mentira -------------
+def test_403_no_meio_da_paginacao_tambem_marca(monkeypatch):
+    """Foi assim que a API velha morreu: 403 a partir de certa página."""
+    cheia = _RespostaHtml(_html(_vagas(14), count=999))
+    achadas, incompletos, _ = _rodar(monkeypatch, [cheia, _RespostaHtml("", status=403)])
+    assert len(achadas) == 14
+    assert incompletos == ["analista de dados"]
+
+
+def test_erro_de_rede_marca_o_termo(monkeypatch):
+    import requests as _req
+    _, incompletos, _ = _rodar(monkeypatch, [_req.exceptions.ConnectionError("caiu")])
+    assert incompletos == ["analista de dados"]
+
+
+def test_pagina_1_sem_vaga_marca_o_termo(monkeypatch):
+    """Zero na primeira página não prova ausência de vaga — medido na API velha
+    em 01/09, e vale igual aqui. Vai pra segunda passada."""
+    _, incompletos, _ = _rodar(monkeypatch, [_RespostaHtml(_html([]))])
+    assert incompletos == ["analista de dados"]
+
+
+def test_termo_que_terminou_bem_nao_e_marcado(monkeypatch):
+    """Leu tudo que existia: não há o que repetir."""
+    _, incompletos, _ = _rodar(monkeypatch, [_RespostaHtml(_html(_vagas(5), count=5))])
+    assert incompletos == []
+
+
+def test_a_trava_de_paginas_nao_deixa_lacar_infinito(monkeypatch):
+    """Se o portal mentir o total e nunca envelhecer, MAX_PAGINAS segura."""
+    cheia = _RespostaHtml(_html(_vagas(14), count=99999))
+    _, _, vistas = _rodar(monkeypatch, [cheia] * (solides.MAX_PAGINAS + 5))
+    assert len(vistas) == solides.MAX_PAGINAS
+
+
+def test_nao_marca_o_mesmo_termo_duas_vezes():
+    s = solides.SolidesScraper(["x"])
+    s._incompletos = []
+    s._registrar_incompletos = True
+    s._anotar_incompleto("x")
+    s._anotar_incompleto("x")
+    assert s._incompletos == ["x"]
+
+
+# ------------- segunda passada: o zero que era mentira -------------
 
 
 class SolidesFalso(solides.SolidesScraper):
@@ -331,91 +505,3 @@ def test_cada_ciclo_recomeca_a_lista():
     assert s._incompletos == []
 
 
-# --------- as quatro saidas que deixam o termo incompleto (01/09) ---------
-
-class _RespostaCrua:
-    def __init__(self, status, corpo=None, quebra_json=False):
-        self.status_code = status
-        self._corpo = corpo
-        self._quebra = quebra_json
-
-    def json(self):
-        if self._quebra:
-            raise ValueError("nao e json")
-        return self._corpo
-
-
-def _rodar_um_termo(monkeypatch, respostas):
-    """Roda o scraper de verdade (com a rede fingida) e devolve os incompletos."""
-    fila = list(respostas)
-
-    def get(url, params=None, timeout=None, headers=None):
-        r = fila.pop(0)
-        if isinstance(r, Exception):
-            raise r
-        return r
-
-    monkeypatch.setattr(solides.requests, "get", get)
-    monkeypatch.setattr(solides.time, "sleep", lambda _: None)
-    s = solides.SolidesScraper(["analista de dados"])
-    s._incompletos = []
-    s._registrar_incompletos = True
-    s._buscar_termo("analista de dados")
-    return s._incompletos
-
-
-CHEIA = {"data": {"data": [dict(VAGA_API, createdAt=HOJE.isoformat())] * 10,
-                  "count": 200, "totalPages": 20}}
-
-
-def test_status_504_marca_o_termo_como_incompleto(monkeypatch):
-    """MEDIDO no ciclo de 01/09 18:07: a Solides devolveu 504 em NOVE termos,
-    quase todos já na página 1 — a fonte fechou com 67 vagas contra ~400. A
-    primeira versão da segunda passada só anotava count=0 e deixava os 504
-    passarem: eu tinha coberto o modo de falha que descobri primeiro, não o que
-    mais doeu."""
-    assert _rodar_um_termo(monkeypatch, [_RespostaCrua(504)]) == ["analista de dados"]
-
-
-def test_504_no_meio_da_paginacao_tambem_marca(monkeypatch):
-    """'analista de dados' quebrou na PÁGINA 4: trouxe 3 páginas e perdeu 18."""
-    resp = [_RespostaCrua(200, CHEIA), _RespostaCrua(200, CHEIA), _RespostaCrua(504)]
-    assert _rodar_um_termo(monkeypatch, resp) == ["analista de dados"]
-
-
-def test_erro_de_rede_marca_o_termo(monkeypatch):
-    import requests as _req
-    erro = _req.exceptions.ConnectionError("caiu")
-    assert _rodar_um_termo(monkeypatch, [erro]) == ["analista de dados"]
-
-
-def test_resposta_nao_json_marca_o_termo(monkeypatch):
-    resp = [_RespostaCrua(200, quebra_json=True)]
-    assert _rodar_um_termo(monkeypatch, resp) == ["analista de dados"]
-
-
-def test_termo_que_terminou_bem_nao_e_marcado(monkeypatch):
-    """Última página lida até o fim: não há o que repetir."""
-    fim = {"data": {"data": [dict(VAGA_API, createdAt=HOJE.isoformat())],
-                    "count": 1, "totalPages": 1}}
-    assert _rodar_um_termo(monkeypatch, [_RespostaCrua(200, fim)]) == []
-
-
-def test_nao_marca_o_mesmo_termo_duas_vezes(monkeypatch):
-    """Repetir o termo na lista faria a segunda passada buscá-lo duas vezes."""
-    s = solides.SolidesScraper(["x"])
-    s._incompletos = []
-    s._registrar_incompletos = True
-    s._anotar_incompleto("x")
-    s._anotar_incompleto("x")
-    assert s._incompletos == ["x"]
-
-
-def test_count_zero_marca_o_termo_no_codigo_real(monkeypatch):
-    """Esta faltava, e o teste de MUTAÇÃO foi quem contou: apagar a anotação do
-    count=0 não derrubava nenhum teste. O caso estava coberto só através de um
-    dublê que substitui _buscar_termo inteiro — ou seja, o teste verificava o
-    próprio dublê, não o scraper. Aqui a rede é fingida mas o método é o de
-    produção."""
-    vazio = {"data": {"data": [], "count": 0, "totalPages": 0}}
-    assert _rodar_um_termo(monkeypatch, [_RespostaCrua(200, vazio)]) == ["analista de dados"]
