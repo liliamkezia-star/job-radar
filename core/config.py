@@ -373,18 +373,47 @@ MERCADOS_REMOTO_ACEITOS = ["Brasil", "LATAM", "Argentina", "Chile", "México", "
 INTERVALO_MINUTOS = int(os.getenv("INTERVALO_MINUTOS", 180))
 
 # Digest ranqueado (item 08): vaga com Job.pontuar_relevancia() >= este
-# limiar notifica na hora (como sempre foi); abaixo disso, fica na fila do
-# digest diário — ver _enviar_digest_diario em main.py.
+# limiar notifica na hora; abaixo disso, fica na fila do digest diário — ver
+# _enviar_digest_diario em main.py. Vaga com publicacao_antiga vai pro digest
+# mesmo com nota alta, e isso não mudou: score mede "bate com o que você
+# procura", não "é recente".
 #
-# MEDIDO: rodei o score contra as ~305 vagas do jobs.db real que ainda
-# batem as regras atuais. Distribuição: score 4 (2%), 5 (24%), 6 (67%),
-# 7 (5%), 8 (2%) — nada em 9-10 na amostra (exige acertar praticamente
-# todo sinal ao mesmo tempo: cargo forte + ferramenta + senioridade alvo +
-# mercado confirmado). Limiar 7 deixa ~7% imediata e ~93% no digest — bate
-# com o pedido ("vaga de score alto na hora, resto agrupado"); 6 deixava
-# 74% imediata (pouca redução de ruído); 8 deixava só 2% (digest com
-# praticamente tudo, quase nenhuma vaga "excelente" se destacando na hora).
-LIMIAR_DIGEST_IMEDIATO = 7
+# ERA 7 ATÉ 10/09/2026. Baixou pra 4 a pedido da usuária, e o motivo tem
+# nome: vaga boa estava se perdendo dentro do digest. O caso que abriu a
+# discussão foi "Analista de Dados Pleno (Vaga Afirmativa para PCD)" do Grupo
+# OLX, remota, encontrada em 09/09 — nota 6, um ponto abaixo do limiar, então
+# foi pro resumo da manhã seguinte em vez de chegar na hora.
+#
+# MEDIDO (10/09) contra as 542 vagas dos 10 dias anteriores. A simulação
+# reproduziu a nota guardada de todas as 542, sem uma divergência, então os
+# números abaixo são do comportamento real e não de estimativa:
+#
+#     limiar   imediatas/dia   ficam no digest/dia
+#        7           7,1              47,1          <- como era
+#        6          37,0              17,2
+#        5          42,0              12,2
+#        4          42,2              12,0          <- escolhido
+#        3          51,8               2,4
+#
+# 5 e 4 dão praticamente o mesmo resultado porque quase não há vaga com nota
+# 4 (1 em 542). O que separa mesmo é 7 -> 6: são as vagas de nota 6, o maior
+# grupo da base, e é onde estava a da OLX.
+#
+# O QUE ISSO CUSTA, dito claramente: ~42 mensagens individuais por dia, em
+# rajadas de ~5 a cada ciclo de 3h. O digest existia justamente pra evitar
+# isso. A troca foi feita de olhos abertos, com o número na mão.
+#
+# ALTERNATIVA MEDIDA E NÃO ESCOLHIDA, registrada porque resolve o mesmo caso
+# por outro caminho e continua disponível: o score desconta 1 ponto de vaga
+# remota "sem mercado declarado" (_PESO_MERCADO_NAO_CONFIRMADO em job.py).
+# No perfil BRASIL esse desconto não faz sentido — remoto no Brasil vale em
+# qualquer lugar pela regra de negócio, não há mercado a confirmar. Corrigir
+# só isso, mantendo o limiar em 7, levaria de 7,1 para 7,7 mensagens/dia e
+# traria 6 vagas em 10 dias: todas "Analista de Dados" Jr/Pleno remotas do
+# perfil BR, incluindo exatamente a da OLX. No perfil INTERNACIONAL o
+# desconto continua certo, porque lá só valem mercados de língua portuguesa
+# e espanhola e a confirmação importa de verdade.
+LIMIAR_DIGEST_IMEDIATO = 4
 
 # Hora UTC a partir da qual o digest diário pode sair (uma vez por perfil,
 # por dia — ver _enviar_digest_diario em main.py). A regra é "ainda não

@@ -242,3 +242,60 @@ def test_prioritario_fora_da_lista_de_busca_e_ignorado(metadados):
 def test_todos_prioritarios_e_nenhum_rodizio(metadados):
     perfil = _PerfilFalso(["a", "b"], por_ciclo=3, prioritarios=["a", "b"])
     assert main._proximo_bloco_termos(perfil) == ["a", "b"]
+
+
+# ---- o que decide chegar na hora ou esperar o resumo (10/09/2026) ----
+
+def test_a_vaga_da_olx_chega_na_hora_e_nao_no_digest():
+    """REGRESSÃO com nome e sobrenome. Em 09/09 esta vaga foi encontrada, foi
+    aprovada, foi notificada — e a usuária não viu, porque tirou nota 6 contra
+    um limiar de 7 e caiu no resumo da manhã seguinte.
+
+    O caso é real: Grupo OLX, via Gupy, remota. A Gupy não declara localização
+    de vaga remota, então `local` vem "Não informado" e o score desconta o
+    ponto de "mercado não confirmado" — foi esse único ponto que a separou do
+    alerta imediato.
+
+    Este teste pina a decisão de baixar o limiar pra 4 num caso concreto, e não
+    no número solto: se alguém devolver o limiar pra 7, é esta vaga que quebra,
+    com o nome dela no output.
+    """
+    from core.config import LIMIAR_DIGEST_IMEDIATO
+    from core.job import Job
+    from core.perfis import PERFIL_BR
+
+    vaga = Job(
+        titulo="Analista de Dados Pleno (Vaga Afirmativa para Pessoas Com Deficiência)",
+        empresa="Grupo OLX",
+        local="Não informado",
+        link="https://vemsergrupoolx.gupy.io/job/eyJqb2JJZCI6MTI0MTQ3MTAsInNvdXJjZSI6Imd1cHlfcG9ydGFsIn0=",
+        site="Gupy",
+        publicado_em="2026-09-09",
+        modalidade="Remoto",
+    )
+    assert vaga.combina_com(PERFIL_BR.regras), "a vaga tem que continuar sendo aprovada"
+    assert vaga.pontuar_relevancia(PERFIL_BR.regras) == 6, (
+        "se a nota mudou, a decisão de limiar foi tomada com outro número"
+    )
+    assert vaga.pontuar_relevancia(PERFIL_BR.regras) >= LIMIAR_DIGEST_IMEDIATO, (
+        "vaga de Analista de Dados Pleno remota no Brasil tem que chegar na hora"
+    )
+
+
+def test_ruido_de_nota_baixa_continua_no_digest():
+    """O outro lado: baixar o limiar não pode ser o mesmo que desligar o digest.
+    Vaga sênior fora do alvo continua agrupada."""
+    from core.config import LIMIAR_DIGEST_IMEDIATO
+    from core.job import Job
+    from core.perfis import PERFIL_BR
+
+    vaga = Job(
+        titulo="Senior Data Analyst - B2B",
+        empresa="X",
+        local="Barcelona, Catalonia, Spain",
+        link="x",
+        site="LinkedIn",
+        publicado_em="2026-09-09",
+        modalidade="Remoto",
+    )
+    assert vaga.pontuar_relevancia(PERFIL_BR.regras) < LIMIAR_DIGEST_IMEDIATO
