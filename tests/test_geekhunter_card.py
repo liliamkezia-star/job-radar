@@ -142,9 +142,22 @@ def test_modalidade_em_maiuscula_vira_capitalizada():
     assert modalidade == "Híbrido"
 
 
-def test_vaga_remota_sem_cidade_ainda_traz_a_modalidade():
-    titulo, local, modalidade = extrair_campos(["Analista de Dados", "PLENO", "REMOTO"])
+def test_vaga_remota_nao_tem_linha_de_cidade_e_isso_nao_e_falha():
+    """Card real (02/10, card 2 da pagina 1): vaga remota vem com TRES linhas,
+    sem cidade nenhuma. local="" aqui vira "Nao informado" no Job, e ela passa
+    no filtro pela modalidade. Nao e o bug que este arquivo conserta — e por
+    isso que a sonda acusou 2 de 10 sem local e nao 0 de 10."""
+    titulo, local, modalidade = extrair_campos(["Analista de Dados", "SÊNIOR", "REMOTO"])
     assert (titulo, local, modalidade) == ("Analista de Dados", "", "Remoto")
+
+
+def test_le_cidade_no_formato_com_hifen():
+    """Card real (02/10, card 9): "Santa Cruz do Sul - RS, Brasil". A mesma
+    fonte usa DOIS formatos de UF, virgula e hifen. A regra se ancora no pais
+    no fim justamente pra nao depender de qual deles veio."""
+    _, local, _ = extrair_campos(["Analista de Dados (PowerBI)", "PLENO", "HÍBRIDO",
+                                  "Santa Cruz do Sul - RS, Brasil"])
+    assert local == "Santa Cruz do Sul - RS, Brasil"
 
 
 def test_brasil_sozinho_conta_como_local():
@@ -201,3 +214,9 @@ def test_uf_que_contradiz_a_cidade_continua_barrada():
     assert not _job("Campina Grande do Sul, PR, Brasil", "Presencial").combina_com(
         PERFIL_BR.regras
     )
+    # e no formato com hifen, que a mesma fonte tambem usa
+    assert not _job("Campina Grande - PR, Brasil", "Presencial").combina_com(
+        PERFIL_BR.regras
+    )
+    # controle: a de verdade continua passando
+    assert _job("Campina Grande - PB, Brasil", "Presencial").combina_com(PERFIL_BR.regras)
