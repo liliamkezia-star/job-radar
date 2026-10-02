@@ -23,6 +23,7 @@ from scrapers.geekhunter import (
     _MAX_NIVEIS_ACIMA,
     _SELETOR_VAGA,
     container_do_card,
+    decidir_pelo_status,
     extrair_campos,
     linhas_do_texto,
 )
@@ -220,3 +221,40 @@ def test_uf_que_contradiz_a_cidade_continua_barrada():
     )
     # controle: a de verdade continua passando
     assert _job("Campina Grande - PB, Brasil", "Presencial").combina_com(PERFIL_BR.regras)
+# --- fim da paginacao x rota morta x falha de verdade ------------------
+#
+# MEDIDO em 02/10/2026: "analista de dados" declara 10 vagas e &page=2
+# responde 404; "desenvolvedor" declara 273, mostra 25 por pagina e tem link
+# numerado ate &page=11, com vagas diferentes na 2. Os dois casos passavam
+# pelo MESMO caminho (timeout de 15s esperando o seletor) e saiam com o mesmo
+# aviso de "pode ter ficado vaga de fora".
+
+
+def test_404_depois_da_primeira_pagina_e_fim_de_resultado():
+    """Termo com uma pagina so. Nao e perda, nao merece aviso."""
+    assert decidir_pelo_status(404, 2) == "fim"
+    assert decidir_pelo_status(404, 3) == "fim"
+
+
+def test_404_na_primeira_pagina_e_rota_morta():
+    """Aqui nao acabou nada: a busca em si parou de existir. Tem que gritar,
+    senao a fonte inteira morre em silencio — foi o que aconteceu com a
+    Solides em 01/09 e com a Gupy em 02/10."""
+    assert decidir_pelo_status(404, 1) == "rota_mudou"
+
+
+def test_erro_de_servidor_nao_e_fim_de_resultado():
+    """500 e 503 NAO sao fim de pagina. Tratar erro como fim esconderia perda
+    exatamente como o aviso falso cansava quem o lia — os dois erros sao a
+    mesma doenca, confundir falha com normalidade."""
+    for status in (500, 502, 503, 403):
+        assert decidir_pelo_status(status, 2) == "seguir"
+
+
+def test_resposta_ausente_nao_inventa_fim():
+    assert decidir_pelo_status(None, 2) == "seguir"
+
+
+def test_pagina_que_carrega_normal_segue():
+    assert decidir_pelo_status(200, 1) == "seguir"
+    assert decidir_pelo_status(200, 2) == "seguir"

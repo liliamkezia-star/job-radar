@@ -74,12 +74,21 @@ with sync_playwright() as p:
     print(f"    fim do corpo da pagina (ultimas 300 letras):\n      {corpo[-300:]!r}")
 
     print("\n=== 3) A URL COM &page=2 ===")
+    # Colher os href da pagina 1 ANTES de navegar: depois do goto os
+    # ElementHandle morrem ("Execution context was destroyed") — foi o crash
+    # da primeira rodada desta sonda, bug meu e nao do site.
+    links1 = set()
+    for c in cards1:
+        try:
+            links1.add(c.get_attribute("href"))
+        except Exception:
+            pass
     cards2 = abrir(page, BASE + "&page=2", "PAGINA 2")
     if cards2:
         print("    primeiros titulos da pagina 2:")
         for c in cards2[:3]:
             print(f"      {c.inner_text().strip()!r}")
-        iguais = {c.get_attribute('href') for c in cards2} == {c.get_attribute('href') for c in cards1}
+        iguais = {c.get_attribute('href') for c in cards2} == links1
         print(f"    a pagina 2 e IGUAL a pagina 1? {iguais}")
     else:
         print("    zero card. Corpo da pagina (primeiras 400 letras):")

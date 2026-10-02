@@ -100,6 +100,30 @@ def extrair_campos(linhas: list[str]) -> tuple[str, str, str]:
             # se o site voltar pra ele, a cidade continua sendo lida.
             local = linha.replace("\U0001F1E7\U0001F1F7", "").strip()
     return titulo, local, modalidade
+# MEDIDO em 02/10/2026, com duas buscas e nao uma:
+#
+#   · "analista de dados" — o site declara "10 vagas disponiveis", mostra 10,
+#     e &page=2 responde 404 "This page could not be found". Nao existe
+#     controle de paginacao nenhum na pagina.
+#   · "desenvolvedor" — declara "273 vagas disponiveis", mostra 25, e tem
+#     links numerados ate &page=11. A pagina 2 carrega 25 vagas DIFERENTES.
+#
+# Conclusao: a paginacao e real e tirar MAX_PAGINAS quebraria o alcance em
+# termo concorrido. O 404 e so "esse termo acabou antes" — e era ele que, por
+# cair no mesmo caminho do timeout, gastava 15s por termo esperando um
+# seletor que nunca viria e avisava "pode ter ficado vaga de fora" quando
+# nao ficou. Aviso falso em todo termo pequeno e como aviso que nao existe:
+# depois de algumas vezes, ninguem le.
+#
+# 404 na PRIMEIRA pagina e outra coisa: nao e fim de resultado, e a rota da
+# busca ter mudado. Esse tem que gritar.
+def decidir_pelo_status(status: int | None, pagina: int) -> str:
+    """"seguir", "fim" ou "rota_mudou", olhando so o status HTTP."""
+    if status == 404:
+        return "rota_mudou" if pagina == 1 else "fim"
+    return "seguir"
+
+
 class GeekHunterScraper(BaseScraper):
     """Busca vagas no https://www.geekhunter.com/pt/vagas."""
 
@@ -130,7 +154,26 @@ class GeekHunterScraper(BaseScraper):
             try:
                 for pagina in range(1, MAX_PAGINAS + 1):
                     url = f"https://www.geekhunter.com/pt/vagas?searchTerm={termo_url}&page={pagina}"
-                    page.goto(url, timeout=60000)
+                    resposta = page.goto(url, timeout=60000)
+                    status = resposta.status if resposta is not None else None
+
+                    # Antes de esperar o seletor: 404 e resposta, nao demora.
+                    # Esperar 15s por ele era o que fabricava o aviso falso.
+                    decisao = decidir_pelo_status(status, pagina)
+                    if decisao == "rota_mudou":
+                        logger.warning(
+                            f"[GeekHunter] 404 na PRIMEIRA pagina de '{termo}'. Isso nao "
+                            "e fim de resultado — e a rota da busca ter mudado. Nenhuma "
+                            "vaga desse termo vai chegar enquanto isso durar."
+                        )
+                        break
+                    if decisao == "fim":
+                        logger.info(
+                            f"[GeekHunter] '{termo}' acabou na pagina {pagina - 1} "
+                            f"(a seguinte responde 404)."
+                        )
+                        break
+
                     sem_resultados = False
                     try:
                         page.wait_for_selector('a[href*="/jobs/"]', timeout=15000)
