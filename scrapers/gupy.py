@@ -41,13 +41,27 @@ logger = get_logger()
 # o ?offset= e a Gupy leria a pagina 1 oito vezes por termo, achando que
 # paginava. E por isso que a guarda de offset abaixo existe.
 #
-# MEDIDO sobre o alcance, e aqui ha PERDA: o portal declara total=100 tanto
-# pra "analista de dados" quanto pra "analista" — numero identico pra termo
-# estreito e pra termo largo e teto, nao total. A API velha dizia 252 pro
-# primeiro. Entao a reconstrucao recupera a fonte, mas com profundidade
-# menor: 100 por termo em vez de 252. Pra robo que roda a cada 3h isso custa
-# pouco (o que importa e o topo da lista, que e o mais recente), mas esta
-# escrito aqui pra ninguem descobrir depois achando que foi regressao.
+# MEDIDO sobre o alcance. O portal declara total=100 tanto pra "analista de
+# dados" quanto pra "analista" — numero identico pra termo estreito e pra termo
+# largo e teto declarado, nao total. A API velha dizia 252 pro primeiro.
+#
+# Eu tratei isso como perda de alcance antes de medir a ORDEM da lista, e
+# estava exagerando. A ordem e por recencia, medido pagina por pagina:
+#
+#     pagina 1 (offset 0)  -> 2026-10-01 .. 2026-09-29
+#     pagina 2 (offset 12) -> 2026-09-29 .. 2026-09-29
+#     pagina 5 (offset 48) -> 2026-09-24 .. 2026-09-23
+#     pagina 9 (offset 96) -> 2026-09-16 .. 2026-09-15
+#
+# As ~100 mais recentes de "analista de dados" cobrem 16 DIAS. Com
+# DIAS_PARA_PARAR = 30 e ciclo de 3h, nada dentro da janela fica de fora em
+# regime: quando o termo volta no rodizio, o que ele precisa ver sao os
+# ultimos dias, nao os ultimos 252 anuncios. O teto custaria algo so numa
+# partida a frio, com banco vazio.
+#
+# Curiosidade medida que vale guardar: declarando total=100, o portal SERVIU
+# 108 itens (9 paginas cheias de 12). O total declarado nao e exato — mais um
+# motivo pra guarda de offset existir em vez de confiar na aritmetica dele.
 URL_PORTAL = "https://portal.gupy.io/job-search/term="
 
 # Quantas vagas o portal manda por pagina. E ELE quem decide (vem em
