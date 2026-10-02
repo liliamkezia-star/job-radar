@@ -3,6 +3,7 @@ import json
 import re
 import time
 import unicodedata
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
@@ -248,6 +249,57 @@ def montar_modalidade(vaga: dict) -> str:
     return ""
 
 
+# Dominio onde a vaga realmente abre. MEDIDO: a API ANTIGA devolvia o link
+# completo ("https://sl91.solides.jobs/vacancies/913862?origem=portal"); o
+# portal novo devolve TRUNCADO, sem o dominio:
+#
+#     redirectLink  "https://quattror./vacancies/931385?origem=portal"
+#     slug          "quattror"
+#
+# E "solides.jobs" NAO aparece em nenhum lugar do payload (conferido: 0
+# ocorrencias) -- o portal completa o dominio no navegador. Entao o scraper
+# tem que completar tambem.
+_DOMINIO_DA_VAGA = "solides.jobs"
+
+
+def montar_link(vaga: dict) -> str:
+    """Completa o host do redirectLink quando ele vem truncado.
+
+    BUG QUE ISSO CONSERTA (08/09 a 02/10, 24 dias): a reconstrucao usou
+    redirectLink cru, e TODO link da Solides saiu quebrado --
+    "https://cybersolutions./vacancies/..." e, quando nao havia slug,
+     "https:///vacancies/...". 9 de 9 vagas no periodo. Clicar na notificacao
+    nao levava a lugar nenhum.
+
+    POR QUE OS TESTES NAO PEGARAM: o redirectLink do exemplo era uma URL
+    completa, escrita por mim. O resto do fixture veio do payload real; esse
+    campo nao. E testar_solides_reconstruido.py, que confere contra a rede,
+    imprimia titulo, local, modalidade e data -- tudo menos o link.
+
+    So repara host TRUNCADO (vazio ou terminando em "."). Host completo passa
+    intacto, pra nao estragar o dia em que eles arrumarem do lado deles.
+
+    Devolve "" quando nao da pra montar (sem host e sem slug). montar_job
+    descarta a vaga nesse caso: vaga sem link e vaga em que ela nao consegue
+    se candidatar, e notificar link morto e pior que nao notificar.
+    """
+    bruto = (vaga.get("redirectLink") or "").strip()
+    if not bruto:
+        return ""
+
+    partes = urlsplit(bruto)
+    host = partes.netloc or ""
+    if host and not host.endswith("."):
+        return bruto
+
+    base = host.rstrip(".") or (vaga.get("slug") or "").strip().strip(".")
+    if not base:
+        return ""
+
+    return urlunsplit((partes.scheme or "https", f"{base}.{_DOMINIO_DA_VAGA}",
+                       partes.path, partes.query, partes.fragment))
+
+
 def montar_job(vaga: dict) -> Job | None:
     """Converte um item da API num Job. None quando falta o essencial.
 
@@ -256,8 +308,14 @@ def montar_job(vaga: dict) -> Job | None:
     silenciosamente o que e aprovado.
     """
     titulo = (vaga.get("title") or "").strip()
-    link = (vaga.get("redirectLink") or "").strip()
-    if not titulo or not link:
+    link = montar_link(vaga)
+    if not titulo:
+        return None
+    if not link:
+        logger.warning(
+            f"[Solides] '{titulo[:50]}' descartada: não deu pra montar o link "
+            "(sem host e sem slug no payload)."
+        )
         return None
 
     return Job(

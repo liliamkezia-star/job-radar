@@ -251,6 +251,58 @@ def _vagas(n, idade_em_dias=1):
             for i in range(n)]
 
 
+# ------------------- o link da vaga (bug de 08/09 a 02/10) -------------------
+#
+# O portal novo devolve redirectLink TRUNCADO, sem o dominio -- e o dominio
+# nao aparece em lugar nenhum do payload. Valores REAIS capturados em 02/10.
+
+@pytest.mark.parametrize("bruto, slug, esperado", [
+    # truncado, com slug: o caso normal do portal novo
+    ("https://quattror./vacancies/931385?origem=portal", "quattror",
+     "https://quattror.solides.jobs/vacancies/931385?origem=portal"),
+    # host sumiu inteiro -- aconteceu de verdade, 18/09
+    ("https:///vacancies/924159?origem=portal", "cybersolutions",
+     "https://cybersolutions.solides.jobs/vacancies/924159?origem=portal"),
+    # id de vaga nem sempre e numero
+    ("https://tornadolog./vacancies/3pXVLDgPmJ?origem=portal", "tornadolog",
+     "https://tornadolog.solides.jobs/vacancies/3pXVLDgPmJ?origem=portal"),
+    # host completo passa INTACTO: no dia em que eles arrumarem, nada quebra
+    ("https://sl91.solides.jobs/vacancies/913862?origem=portal", "sl91",
+     "https://sl91.solides.jobs/vacancies/913862?origem=portal"),
+])
+def test_completa_o_host_truncado_do_link(bruto, slug, esperado):
+    assert solides.montar_link({"redirectLink": bruto, "slug": slug}) == esperado
+
+
+def test_sem_host_e_sem_slug_nao_inventa_link():
+    assert solides.montar_link({"redirectLink": "https:///vacancies/1", "slug": ""}) == ""
+    assert solides.montar_link({"redirectLink": "", "slug": "x"}) == ""
+
+
+def test_vaga_sem_link_montavel_e_descartada(caplog):
+    """Vaga sem link é vaga em que ela não consegue se candidatar. Notificar
+    link morto é pior que não notificar — e o descarte tem que APARECER no log,
+    não acontecer em silêncio."""
+    vaga = dict(_VAGA_RSC, redirectLink="https:///vacancies/1", slug="")
+    with caplog.at_level(logging.WARNING, logger=solides.logger.name):
+        assert montar_job(vaga) is None
+    assert any("não deu pra montar o link" in r.message for r in caplog.records)
+
+
+def test_o_job_montado_tem_link_que_ABRE():
+    """O teste que faltava em 08/09. O fixture da reconstrução usava um
+    redirectLink completo escrito por mim, então o formato do link passava por
+    construção — e 9 de 9 links saíram quebrados em produção por 24 dias.
+
+    Agora o teste valida o FORMATO: host com domínio de verdade, não só
+    "existe uma string em job.link"."""
+    import re
+    vaga = dict(_VAGA_RSC, redirectLink="https://quattror./vacancies/931385?origem=portal",
+                slug="quattror")
+    job = montar_job(vaga)
+    assert re.match(r"^https://[a-z0-9-]+\.solides\.jobs/vacancies/", job.link), job.link
+
+
 # ---------------------------- slug e rota ----------------------------
 
 @pytest.mark.parametrize("termo, esperado", [
