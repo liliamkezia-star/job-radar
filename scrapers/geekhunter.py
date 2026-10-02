@@ -28,6 +28,78 @@ def _empresa_da_url(path: str) -> str:
     return "Não informado"
 
 
+# MEDIDO em 02/10/2026: o layout do card mudou e o scraper passou a trazer
+# cidade E modalidade vazias em 100% das vagas (21 brutas -> 0 aprovadas
+# num ciclo; nenhuma reprovou pelo titulo). Duas causas, as duas vistas na
+# sonda, nao supostas:
+#
+# 1. A ancora a[href*="/jobs/"] hoje envolve SO o titulo. Senioridade,
+#    modalidade e cidade estao no DIV bisavo dela:
+#      <a>   ['Analista de Dados - Presencial /SP']
+#      <h3>  idem
+#      <div> idem
+#      <div> ['Analista de Dados - Presencial /SP', 'PLENO',
+#             'PRESENCIAL', 'Sao Paulo, SP, Brasil']
+#    Antes o texto da ancora trazia tudo, entao card.inner_text() bastava.
+# 2. A bandeira do Brasil que marcava a linha de cidade nao existe mais. O
+#    formato agora e "Cidade, UF, Brasil" — a regra antiga
+#    re.match(r"^<bandeira>", linha) nunca mais casava.
+#
+# Por que SUBIR ate achar, em vez de fixar o bisavo: um wrapper a mais no
+# meio (acontece quando o site troca o grid) voltaria a zerar tudo em
+# silencio. Sobe no maximo _MAX_NIVEIS_ACIMA.
+#
+# Guarda contra subir DEMAIS: se o nivel achado contem mais de uma ancora
+# de vaga, ele e a LISTA e nao o card — dado de uma vaga vazaria pra outra.
+# Nesse caso devolve None e o chamador AVISA, em vez de inventar cidade.
+_MAX_NIVEIS_ACIMA = 5
+
+_SELETOR_VAGA = 'a[href*="/jobs/"]'
+
+# "Sao Paulo, SP, Brasil", "Recife, PE, Brasil" e tambem "Brasil" sozinho
+# (vaga remota). Exige o pais no fim pra nao confundir com titulo que tem
+# virgula.
+_RE_LINHA_DE_LOCAL = re.compile(r"^(.*,\s*)?brasil\.?$", re.IGNORECASE)
+
+
+def linhas_do_texto(texto: str) -> list[str]:
+    return [l.strip() for l in texto.split("\n") if l.strip()]
+
+
+def container_do_card(ancora, max_niveis: int = _MAX_NIVEIS_ACIMA):
+    """Sobe na arvore a partir da ancora ate o elemento que tem mais que o
+    titulo. None quando nao achou, ou quando o que achou e a lista inteira."""
+    atual = ancora
+    for _ in range(max_niveis):
+        pai = atual.query_selector("xpath=..")
+        if pai is None:
+            return None
+        atual = pai
+        if len(linhas_do_texto(atual.inner_text())) <= 1:
+            continue
+        if len(atual.query_selector_all(_SELETOR_VAGA)) > 1:
+            return None
+        return atual
+    return None
+
+
+def extrair_campos(linhas: list[str]) -> tuple[str, str, str]:
+    """titulo, local e modalidade a partir das linhas do card."""
+    if not linhas:
+        return "", "", ""
+    titulo = linhas[0]
+    modalidade = ""
+    local = ""
+    for linha in linhas[1:]:
+        if linha.lower() in _MODALIDADES:
+            modalidade = linha.capitalize()
+        elif _RE_LINHA_DE_LOCAL.match(linha):
+            local = linha
+        elif linha.startswith("\U0001F1E7\U0001F1F7"):
+            # Formato antigo (bandeira). Mantido porque custa uma linha e,
+            # se o site voltar pra ele, a cidade continua sendo lida.
+            local = linha.replace("\U0001F1E7\U0001F1F7", "").strip()
+    return titulo, local, modalidade
 class GeekHunterScraper(BaseScraper):
     """Busca vagas no https://www.geekhunter.com/pt/vagas."""
 
@@ -89,21 +161,23 @@ class GeekHunterScraper(BaseScraper):
                     if not cards:
                         break
 
+                    sem_container = 0
                     for card in cards:
                         try:
-                            linhas = [l.strip() for l in card.inner_text().split("\n") if l.strip()]
+                            # O container tem o texto da ancora MAIS cidade,
+                            # modalidade e senioridade. Quando nao da pra
+                            # achar, cai pra ancora (titulo + link ainda
+                            # valem) e conta pro aviso no fim da pagina.
+                            container = container_do_card(card)
+                            if container is None:
+                                sem_container += 1
+                            texto = (container or card).inner_text()
+
+                            linhas = linhas_do_texto(texto)
                             if not linhas:
                                 continue
-                            titulo = linhas[0]
 
-                            modalidade = ""
-                            cidade = ""
-                            for linha in linhas[1:]:
-                                if linha.lower() in _MODALIDADES:
-                                    modalidade = linha.capitalize()
-                                elif re.match(r"^🇧🇷", linha):
-                                    cidade = linha.replace("🇧🇷", "").strip()
-
+                            titulo, cidade, modalidade = extrair_campos(linhas)
                             local = cidade or "Não informado"
 
                             link = card.get_attribute("href")
@@ -116,7 +190,7 @@ class GeekHunterScraper(BaseScraper):
                             if link.startswith("/"):
                                 link = f"https://www.geekhunter.com{link}"
 
-                            publicado_em = extrair_data_publicacao(card.inner_text())
+                            publicado_em = extrair_data_publicacao(texto)
 
                             vagas.append(Job(
                                 titulo=titulo,
@@ -130,6 +204,18 @@ class GeekHunterScraper(BaseScraper):
                         except Exception as e:
                             logger.warning(f"[GeekHunter] Erro ao processar card: {e}")
                             continue
+
+                    if sem_container:
+                        # GRITA: sem o container, cidade e modalidade voltam
+                        # vazias e a vaga morre no filtro de local. Foi
+                        # exatamente isso acontecendo em silencio desde a
+                        # mudanca de layout.
+                        logger.warning(
+                            f"[GeekHunter] {sem_container} de {len(cards)} card(s) da "
+                            f"pagina {pagina} de '{termo}' sem container legivel — "
+                            "cidade e modalidade ficaram vazias nesses. O layout do "
+                            "card provavelmente mudou de novo."
+                        )
 
                     if sem_resultados:
                         break

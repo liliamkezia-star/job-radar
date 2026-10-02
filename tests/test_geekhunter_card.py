@@ -1,0 +1,203 @@
+"""Leitura do card da GeekHunter depois da mudanca de layout.
+
+POR QUE EXISTE. Em 02/10/2026 a GeekHunter trouxe 21 vagas brutas e aprovou
+ZERO. Nenhuma reprovou pelo titulo — o filtro aprovaria todas. Elas morreram
+porque o scraper lia local="Nao informado" e modalidade="" em 21 de 21, e sem
+cidade nem sinal de remoto a vaga nao passa na regra de localizacao.
+
+Duas causas, as duas medidas na sonda (nao supostas):
+
+  1. a ancora a[href*="/jobs/"] passou a envolver SO o titulo; cidade,
+     modalidade e senioridade ficaram no DIV bisavo dela;
+  2. a bandeira do Brasil, que marcava a linha de cidade, desapareceu — o
+     formato agora e "Cidade, UF, Brasil".
+
+O TEXTO DOS CARDS AQUI E REAL, capturado da pagina em 02/10/2026. Isso nao e
+preciosismo: o link da Solides ficou quebrado 24 dias porque a fixture do
+teste tinha um redirectLink completo que EU escrevi, e o site manda incompleto.
+Fixture inventada testa a minha imaginacao, nao o site.
+"""
+from core.job import Job
+from core.perfis import PERFIL_BR
+from scrapers.geekhunter import (
+    _MAX_NIVEIS_ACIMA,
+    _SELETOR_VAGA,
+    container_do_card,
+    extrair_campos,
+    linhas_do_texto,
+)
+
+# Capturado em 02/10/2026, termo "analista de dados", pagina 1, card 1.
+_CARD_REAL = [
+    "Analista de Dados - Presencial /SP",
+    "PLENO",
+    "PRESENCIAL",
+    "São Paulo, SP, Brasil",
+]
+
+# A arvore real, de baixo pra cima: <a> e <h3> e <div> com so o titulo, e o
+# <div> bisavo com as quatro linhas.
+_ARVORE_REAL = [
+    [_CARD_REAL[0]],
+    [_CARD_REAL[0]],
+    [_CARD_REAL[0]],
+    _CARD_REAL,
+]
+
+
+class _Elemento:
+    """ElementHandle de mentira: so o que container_do_card usa."""
+
+    def __init__(self, linhas: list[str], ancoras_de_vaga: int = 1):
+        self.linhas = linhas
+        self.ancoras_de_vaga = ancoras_de_vaga
+        self.pai: "_Elemento | None" = None
+
+    def inner_text(self) -> str:
+        return "\n".join(self.linhas)
+
+    def query_selector(self, seletor: str):
+        assert seletor == "xpath=..", seletor
+        return self.pai
+
+    def query_selector_all(self, seletor: str):
+        assert seletor == _SELETOR_VAGA, seletor
+        return [None] * self.ancoras_de_vaga
+
+
+def _montar(niveis: list[list[str]], ancoras: list[int] | None = None) -> _Elemento:
+    """Monta a arvore de baixo pra cima e devolve a ancora (nivel 0)."""
+    ancoras = ancoras or [1] * len(niveis)
+    elementos = [_Elemento(l, a) for l, a in zip(niveis, ancoras)]
+    for filho, pai in zip(elementos, elementos[1:]):
+        filho.pai = pai
+    return elementos[0]
+
+
+# --- subir na arvore ---------------------------------------------------
+
+
+def test_acha_o_container_na_arvore_real():
+    container = container_do_card(_montar(_ARVORE_REAL))
+    assert container is not None
+    assert linhas_do_texto(container.inner_text()) == _CARD_REAL
+
+
+def test_wrapper_extra_no_meio_nao_quebra():
+    """Por isso o codigo SOBE ate achar em vez de fixar o bisavo: um div a
+    mais no grid, e fixar o nivel voltaria a zerar tudo em silencio."""
+    arvore = [[_CARD_REAL[0]]] * 4 + [_CARD_REAL]
+    container = container_do_card(_montar(arvore))
+    assert container is not None
+    assert linhas_do_texto(container.inner_text()) == _CARD_REAL
+
+
+def test_nao_aceita_a_lista_inteira_como_container():
+    """Se o nivel achado tem mais de uma vaga dentro, ele e a LISTA. Usar o
+    texto dele colaria a cidade de uma vaga no titulo da outra — erro pior
+    que ficar sem cidade, porque passaria desapercebido no filtro."""
+    duas_vagas = _CARD_REAL + ["Analista de BI", "SENIOR", "REMOTO", "Recife, PE, Brasil"]
+    ancora = _montar([[_CARD_REAL[0]], duas_vagas], ancoras=[1, 2])
+    assert container_do_card(ancora) is None
+
+
+def test_o_limite_de_niveis_impede_subir_ate_a_pagina_toda():
+    """Sem o limite, uma arvore mais funda que o esperado faz a subida chegar
+    no <body>. Numa busca com UMA vaga so, a guarda de lista nao salva (o body
+    tem uma ancora, nao duas) e o "card" viraria a pagina inteira: titulo
+    "GeekHunter", menu de navegacao no meio e cidade do rodape."""
+    pagina_toda = [
+        "GeekHunter",
+        "Entrar",
+        "Vagas",
+        _CARD_REAL[0],
+        "PLENO",
+        "PRESENCIAL",
+        "São Paulo, SP, Brasil",
+        "Belo Horizonte, MG, Brasil",
+    ]
+    niveis = [[_CARD_REAL[0]]] * (_MAX_NIVEIS_ACIMA + 1) + [pagina_toda]
+    ancoras = [1] * len(niveis)
+    assert container_do_card(_montar(niveis, ancoras)) is None
+
+
+def test_desiste_quando_a_ancora_nao_tem_pai():
+    assert container_do_card(_Elemento([_CARD_REAL[0]])) is None
+
+
+# --- ler os campos -----------------------------------------------------
+
+
+def test_le_titulo_cidade_e_modalidade_do_card_real():
+    titulo, local, modalidade = extrair_campos(_CARD_REAL)
+    assert titulo == "Analista de Dados - Presencial /SP"
+    assert local == "São Paulo, SP, Brasil"
+    assert modalidade == "Presencial"
+
+
+def test_modalidade_em_maiuscula_vira_capitalizada():
+    """O site mudou pra maiuscula ("PRESENCIAL"); .lower() no teste de
+    pertinencia e .capitalize() na saida continuam dando conta."""
+    _, _, modalidade = extrair_campos(["Analista de Dados", "HÍBRIDO"])
+    assert modalidade == "Híbrido"
+
+
+def test_vaga_remota_sem_cidade_ainda_traz_a_modalidade():
+    titulo, local, modalidade = extrair_campos(["Analista de Dados", "PLENO", "REMOTO"])
+    assert (titulo, local, modalidade) == ("Analista de Dados", "", "Remoto")
+
+
+def test_brasil_sozinho_conta_como_local():
+    _, local, _ = extrair_campos(["Analista de Dados", "REMOTO", "Brasil"])
+    assert local == "Brasil"
+
+
+def test_linha_com_virgula_sem_o_pais_nao_e_lida_como_local():
+    """A linha de local se identifica pelo pais no fim. Sem essa exigencia,
+    qualquer linha com virgula ("Dados, BI e Analytics") viraria cidade."""
+    _, local, _ = extrair_campos(["Analista de Dados", "Dados, BI e Analytics"])
+    assert local == ""
+
+
+def test_formato_antigo_com_bandeira_continua_funcionando():
+    _, local, _ = extrair_campos(["Analista de Dados", "\U0001F1E7\U0001F1F7 Recife, PE"])
+    assert local == "Recife, PE"
+
+
+def test_card_vazio_nao_explode():
+    assert extrair_campos([]) == ("", "", "")
+
+
+# --- o que isso muda no filtro (o motivo de tudo) ----------------------
+
+
+def _job(local: str, modalidade: str) -> Job:
+    return Job(
+        titulo="Analista de Dados",
+        empresa="Empresa",
+        local=local,
+        link="https://www.geekhunter.com/pt/empresa/jobs/1",
+        site="GeekHunter",
+        publicado_em="",
+        modalidade=modalidade,
+    )
+
+
+def test_vaga_de_cidade_aceita_agora_passa():
+    """Antes do conserto esta mesma vaga chegava ao filtro com
+    local="Nao informado" e modalidade="" — e reprovava."""
+    assert _job("Recife, PE, Brasil", "Presencial").combina_com(PERFIL_BR.regras)
+    assert not _job("Não informado", "").combina_com(PERFIL_BR.regras)
+
+
+def test_vaga_de_cidade_fora_da_regra_continua_reprovando():
+    """O conserto nao pode virar peneira: Sao Paulo presencial esta fora."""
+    assert not _job("São Paulo, SP, Brasil", "Presencial").combina_com(PERFIL_BR.regras)
+
+
+def test_uf_que_contradiz_a_cidade_continua_barrada():
+    """"Campina Grande do Sul, PR, Brasil" nao e Campina Grande/PB. O formato
+    novo traz a UF, entao a guarda _UF_DA_CIDADE tem com o que trabalhar."""
+    assert not _job("Campina Grande do Sul, PR, Brasil", "Presencial").combina_com(
+        PERFIL_BR.regras
+    )
