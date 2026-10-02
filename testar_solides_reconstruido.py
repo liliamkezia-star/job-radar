@@ -22,6 +22,11 @@ for termo in TERMOS:
     for job in vagas[:5]:
         print(f"    {job.titulo[:40]:40} | {job.local[:24]:24} | "
               f"{job.modalidade or '-':10} | {job.publicado_em}")
+        # O LINK entra aqui porque em 08/09 esta verificacao imprimia TODOS
+        # os campos menos ele -- e foi exatamente o link que quebrou, por
+        # 24 dias. Conferir o que nao quebrou e facil; o truque e conferir
+        # tudo.
+        print(f"      {job.link}")
     if not vagas:
         print("    (nada — ver se o log acima gritou 'portal mudou' ou 'formato')")
 
@@ -30,6 +35,8 @@ print("O QUE CONFERIR:")
 print("  · vagas montadas > 0 nos tres termos -> rota, slug e extracao de pe.")
 print("  · local no formato 'Cidade - UF' e data em AAAA-MM-DD -> mapeamento ok.")
 print("  · 'parou na pagina N' no log -> a parada por idade continua funcionando.")
+print("  · TODO link no formato https://<empresa>.solides.jobs/vacancies/<id>.")
+print("    Host truncado (https://empresa./...) e o bug de 08/09 voltando.")
 print("  · zero em tudo COM erro no log -> o formato mudou de novo, e o log diz.")
 print("  · zero em tudo SEM erro no log -> a rota mudou; conferir url acima no")
 print("    navegador antes de mexer em codigo.")
