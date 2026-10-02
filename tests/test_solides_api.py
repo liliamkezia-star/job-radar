@@ -69,10 +69,22 @@ def test_usa_a_sigla_e_nao_o_nome_do_estado():
 
 def test_data_ja_vem_no_formato_certo():
     """createdAt vem como "2026-08-28", sem hora -- ao contrario da Gupy, que
-    manda ISO completo e precisa de corte."""
+    manda ISO completo e precisa de corte.
+
+    So o FORMATO e testado aqui, com data fixa. A checagem de "e antiga?"
+    mudou pro teste abaixo, com data relativa: antes ela usava esta mesma data
+    fixa e passou a falhar sozinha quando 28/08/2026 ficou com mais de 30 dias
+    (02/10). Teste que quebra pelo calendario grita lobo, e vira ruido."""
     job = montar_job(VAGA_API)
     assert job.publicado_em_legivel == "28/08/2026"
-    assert job.publicacao_antiga is False
+
+
+def test_vaga_recente_nao_e_antiga_e_vaga_velha_e():
+    recente = montar_job(dict(VAGA_API, createdAt=date.today().isoformat()))
+    velha = montar_job(dict(VAGA_API,
+                            createdAt=(date.today() - timedelta(days=120)).isoformat()))
+    assert recente.publicacao_antiga is False
+    assert velha.publicacao_antiga is True
 
 
 @pytest.mark.parametrize("jobtype, home, esperado", [
@@ -229,7 +241,11 @@ def _html(vagas, count=None, lixo_antes=True):
 
 
 def _vagas(n, idade_em_dias=1):
-    dia = (HOJE - timedelta(days=idade_em_dias)).isoformat()
+    # date.today() de proposito, e NAO o HOJE congelado: estas vagas passam
+    # pelo _buscar_termo de verdade, que chama pagina_toda_antiga com a data
+    # real. Com HOJE fixo, o teste passava no dia em que foi escrito e
+    # quebrava sozinho semanas depois -- foi o que aconteceu em 02/10.
+    dia = (date.today() - timedelta(days=idade_em_dias)).isoformat()
     return [dict(_VAGA_RSC, id=900000 + i, createdAt=dia,
                  redirectLink=f"https://x.solides.jobs/vacancies/{900000 + i}")
             for i in range(n)]
