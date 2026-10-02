@@ -232,6 +232,100 @@ def _enviar_digest_diario(perfil: Perfil):
         )
 
 
+# Quantos ciclos seguidos sem UMA vaga bruta antes de avisar que a fonte
+# morreu. 3 ciclos = ~9 horas.
+#
+# MEDIDO (02/10), nos ciclos 388-390: a WeWorkRemotely voltou 0, depois 4,
+# depois 0. Com limiar 1 ou 2 ela dispararia alerta sem ter problema -- fonte
+# pequena tem dia fraco. A Gupy voltou 0 nos TRES, e e essa que precisa
+# avisar. 3 separa os dois casos com folga.
+CICLOS_ZERADOS_PRA_ALERTAR = 3
+
+
+def _chave_zeros(nome: str) -> str:
+    return f"zeros_consecutivos_{nome}"
+
+
+def _chave_ja_avisou(nome: str) -> str:
+    return f"alerta_fonte_morta_{nome}"
+
+
+def avaliar_fonte_morta(trouxe_vaga: bool, zeros_antes: str | None,
+                        ja_avisou: str | None) -> tuple[int, bool, bool]:
+    """Decide, pra UMA fonte, o novo contador de zeros e se cabe avisar.
+
+    Devolve (zeros_agora, deve_avisar, deve_avisar_que_voltou).
+
+    POR QUE POR FONTE, E NAO PELA MAIORIA. O alerta de saude existente exige
+    maioria ESTRITA das fontes com problema, e isso esta certo pro que ele
+    mede ("o ciclo inteiro degringolou"). Mas uma fonte morrendo SOZINHA passa
+    invisivel, e foi o que aconteceu duas vezes:
+
+      · 01/09: a Solides caiu de ~400 vagas pra 70 e ninguem viu.
+      · desde 02/10 (pelo menos): a Gupy responde 404 em TODO termo, devolve
+        zero vaga, e tambem ninguem viu -- descoberto por acaso, ao olhar log
+        de ciclo por outro motivo.
+
+    Nos dois casos o log DIZIA a verdade ("resposta inesperada da API, nao e
+    busca vazia" -- correcao feita em 31/08). O sistema sabia e nao avisava.
+
+    POR QUE ESPERAR 3 CICLOS, E NAO AVISAR NO PRIMEIRO. Esta na docstring de
+    _deve_alertar_saude e vale igual aqui: "alerta que dispara sem motivo e
+    pior que alerta que nao existe -- depois de duas ou tres vezes, deixa de
+    ser lido". Fonte pequena tem dia de zero legitimo (a WeWorkRemotely fez
+    0, 4, 0 nos ciclos 388-390). Exigir 3 seguidos separa "dia fraco" de
+    "morreu" sem precisar saber nada sobre a fonte.
+
+    AVISA UMA VEZ POR QUEDA, nao por ciclo: ja_avisou segura o resto. Sem
+    isso, fonte morta vira 8 mensagens por dia ate alguem consertar -- e o
+    alerta morre de tanto repetir.
+    """
+    try:
+        zeros = int(zeros_antes or 0)
+    except ValueError:
+        zeros = 0
+
+    if trouxe_vaga:
+        # Voltou. Avisa a recuperacao SO se a queda tinha sido avisada --
+        # senao seria mensagem sobre um problema que ela nunca soube que teve.
+        return 0, False, bool(ja_avisou)
+
+    zeros += 1
+    deve = zeros >= CICLOS_ZERADOS_PRA_ALERTAR and not ja_avisou
+    return zeros, deve, False
+
+
+def _registrar_saude_da_fonte(perfil, nome: str, trouxe_vaga: bool) -> None:
+    """Guarda o contador de zeros da fonte e avisa no Telegram quando ela
+    morre -- ou quando volta. Estado vive na tabela `metadados`, a mesma que
+    guarda o rodizio de termos e o controle do digest."""
+    zeros, avisar, voltou = avaliar_fonte_morta(
+        trouxe_vaga,
+        obter_metadado(_chave_zeros(nome)),
+        obter_metadado(_chave_ja_avisou(nome)),
+    )
+    definir_metadado(_chave_zeros(nome), str(zeros))
+
+    if avisar:
+        logger.error(
+            f"[{perfil.nome}] {nome} está sem trazer vaga há {zeros} ciclos "
+            "seguidos — tratada como fonte morta, alerta enviado."
+        )
+        if enviar_mensagem(
+            f"🔴 <b>Fonte morta: {nome}</b>\n\n"
+            f"Não trouxe <b>uma única vaga bruta</b> nos últimos {zeros} ciclos "
+            f"(~{zeros * 3}h), no perfil {perfil.nome}.\n\n"
+            "Zero vaga bruta não é \"não tem vaga hoje\" — é a fonte não "
+            "respondendo. Vale olhar o log do ciclo: costuma haver status 403, "
+            "404 ou 504 ali dizendo o motivo."
+        ):
+            definir_metadado(_chave_ja_avisou(nome), str(zeros))
+    elif voltou:
+        logger.info(f"[{perfil.nome}] {nome} voltou a trazer vaga.")
+        if enviar_mensagem(f"🟢 <b>{nome} voltou</b>\n\nA fonte está trazendo vaga de novo."):
+            definir_metadado(_chave_ja_avisou(nome), "")
+
+
 def _deve_alertar_saude(com_problema: int, total: int) -> bool:
     """A maioria ESTRITA das fontes falhou neste ciclo?
 
@@ -298,6 +392,7 @@ def ciclo_de_busca(perfil: Perfil):
             except Exception as e:
                 logger.error(f"[{perfil.nome}] Erro no scraper {nome}: {e}")
                 scrapers_com_problema.append(nome)
+                _registrar_saude_da_fonte(perfil, nome, trouxe_vaga=False)
                 continue
 
             # Cada scraper trata timeout por termo internamente (só loga e
@@ -308,7 +403,10 @@ def ciclo_de_busca(perfil: Perfil):
             if not vagas:
                 logger.warning(f"[{perfil.nome}] {nome} não retornou nenhuma vaga bruta neste ciclo.")
                 scrapers_com_problema.append(nome)
+                _registrar_saude_da_fonte(perfil, nome, trouxe_vaga=False)
                 continue
+
+            _registrar_saude_da_fonte(perfil, nome, trouxe_vaga=True)
 
             total_brutas += len(vagas)
             vagas_filtradas, descartes = filtrar_vagas(vagas, perfil.regras)
