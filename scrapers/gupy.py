@@ -1,4 +1,7 @@
+import json
+import re
 import time
+from urllib.parse import quote
 
 import requests
 
@@ -8,38 +11,53 @@ from scrapers.base import BaseScraper
 
 logger = get_logger()
 
-# API que o proprio portal da Gupy chama pra montar a pagina de busca.
+# A API do portal (employability-portal.gupy.io/api/v1/jobs) MORREU.
 #
-# MEDIDO (2026-08-29): o scraper anterior abria um NAVEGADOR e raspava o HTML
-# com o seletor "a:has(h3)", lendo no maximo 3 paginas de 12 = teto de 36
-# vagas por termo. Esta API responde, pro mesmo termo "analista de dados":
+# MEDIDO (2026-10-02): 404 em todo termo, 404 sem parametro nenhum e 404 na
+# raiz /api/v1/. Nao e parametro errado nem bloqueio — a rota saiu do ar. A
+# Gupy trouxe ZERO vaga em tres ciclos seguidos, e isso foi descoberto por
+# acaso, lendo log por outro motivo. (O alerta de fonte morta de d664da2
+# nasceu exatamente dessa falha.)
 #
-#     {"pagination": {"total": 252, "limit": 10, "offset": 0}}
+# Os dados agora vem embutidos no HTML da propria pagina de busca, no dialeto
+# antigo do Next (__NEXT_DATA__, um JSON unico), em
+# props.pageProps.initialJobList. Nao e o mesmo dialeto da Solides, que usa
+# RSC em pedacos (self.__next_f.push) — ali foi preciso remontar o payload,
+# aqui e um json.loads e pronto.
 #
-# 252 contra 36. Era essa a explicacao das 59 vagas que a Gupy trouxe em tres
-# semanas -- volume ela sempre teve; o scraper e que so enxergava o comeco.
+# O QUE NAO MUDOU: montar_job, montar_local, montar_modalidade, o Job, o
+# filtro, a pontuacao, a deduplicacao, o formato do log e os testes de
+# tests/test_gupy_api.py. Trocou SO a camada de busca — e continua sem
+# navegador, com requests, como era.
 #
-# O que a troca resolve, alem do alcance:
-#   - paginacao deixa de ser adivinhada. O scraper de HTML descobria o fim
-#     CONTANDO cards e comparando com a primeira pagina, mecanismo que ja
-#     produziu alarme falso de "vaga perdida" (ver d5db08a). Aqui a propria
-#     resposta diz o total: para-se quando offset >= total, sem heuristica.
-#   - publishedDate e workplaceType vem prontos. O HTML nao trazia data
-#     nenhuma, e vaga velha chegava como nova.
-#   - sem navegador: nao ha seletor pra quebrar quando a Gupy mexe no layout,
-#     e o ciclo encurta.
+# MEDIDO sobre a paginacao, com o criterio escrito antes do resultado ("o
+# offset tem que andar E o primeiro titulo tem que mudar"):
 #
-# O QUE NAO MUDOU, de proposito: o Job montado, o filtro, a pontuacao, a
-# deduplicacao e o formato do log. So a camada de busca foi trocada.
-URL_API = "https://employability-portal.gupy.io/api/v1/jobs"
+#     ?page=2       -> offset 12, primeiro titulo diferente.  PAGINOU.
+#     ?offset=12    -> offset 0, primeiro titulo igual.       NAO PAGINOU.
+#     /page=2       -> 200 com pagination vazia e 0 vaga.     NAO PAGINOU.
+#
+# Os tres respondem 200. Se o criterio fosse "status 200", eu teria escolhido
+# o ?offset= e a Gupy leria a pagina 1 oito vezes por termo, achando que
+# paginava. E por isso que a guarda de offset abaixo existe.
+#
+# MEDIDO sobre o alcance, e aqui ha PERDA: o portal declara total=100 tanto
+# pra "analista de dados" quanto pra "analista" — numero identico pra termo
+# estreito e pra termo largo e teto, nao total. A API velha dizia 252 pro
+# primeiro. Entao a reconstrucao recupera a fonte, mas com profundidade
+# menor: 100 por termo em vez de 252. Pra robo que roda a cada 3h isso custa
+# pouco (o que importa e o topo da lista, que e o mais recente), mas esta
+# escrito aqui pra ninguem descobrir depois achando que foi regressao.
+URL_PORTAL = "https://portal.gupy.io/job-search/term="
 
-# A API aceita limit alto (testado com 100). 100 por requisicao cobre a
-# maioria dos termos numa chamada so.
-LIMITE_POR_PAGINA = 100
+# Quantas vagas o portal manda por pagina. E ELE quem decide (vem em
+# pagination.limit); isto e so o palpite inicial pro caso de a resposta nao
+# declarar.
+POR_PAGINA_PADRAO = 12
 
-# Teto de vagas por termo. Nao e limitacao da API -- e escolha: termo
-# concorrido tem centenas, e as ultimas sao as mais antigas e menos
-# relevantes. 300 e 8x o teto anterior e ainda cabe em 3 requisicoes.
+# Teto de vagas por termo. Hoje o portal corta antes (100), entao este numero
+# nao morde — fica porque e escolha do scraper e nao da fonte, e se o portal
+# voltar a servir 252 ele e que manda.
 MAX_VAGAS_POR_TERMO = 300
 
 TIMEOUT = 30
@@ -47,6 +65,65 @@ UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
+
+# Busca POSICIONAL da tag: nao supor ordem de atributo. Supor
+# '<script id="__NEXT_DATA__" type="application/json">' na ordem que eu
+# imaginei foi o que fez a primeira sondagem desta reconstrucao nao achar
+# nada numa pagina que tinha o dado.
+_ABERTURA_NEXT_DATA = re.compile(r"<script[^>]*__NEXT_DATA__[^>]*>", re.IGNORECASE)
+
+
+def url_da_busca(termo: str, pagina: int) -> str:
+    """quote() e nao quote_plus(): aqui o termo vai no CAMINHO da URL
+    ("/job-search/term=analista%20de%20dados"), nao na query string, e "+"
+    no caminho e um "+" literal, nao um espaco."""
+    base = f"{URL_PORTAL}{quote(termo)}"
+    return base if pagina <= 1 else f"{base}?page={pagina}"
+
+
+def extrair_next_data(html: str) -> dict | None:
+    """O JSON do __NEXT_DATA__. None quando a pagina nao tem (ou nao e JSON)."""
+    abertura = _ABERTURA_NEXT_DATA.search(html)
+    if not abertura:
+        return None
+    fim = html.find("</script>", abertura.end())
+    if fim == -1:
+        return None
+    try:
+        return json.loads(html[abertura.end():fim])
+    except ValueError:
+        return None
+
+
+def extrair_lista(html: str) -> tuple[dict, list] | None:
+    """(pagination, data) de props.pageProps.initialJobList.
+
+    Caminho CONHECIDO, de proposito, em vez de "a maior lista de dicionarios
+    da pagina": essa heuristica, na sondagem, escolheu props.pageProps.toggles
+    (569 feature flags) em vez das 12 vagas. Heuristica acha sempre alguma
+    coisa, e quando acha a coisa errada ninguem percebe.
+
+    None quando o formato mudou — e ai GRITA, porque o jeito silencioso de
+    morrer e exatamente o que custou tres ciclos desta fonte.
+    """
+    dados = extrair_next_data(html)
+    if dados is None:
+        logger.error(
+            "[Gupy] __NEXT_DATA__ não encontrado na página de busca. O formato "
+            "da página mudou — nenhuma vaga vai sair daqui enquanto isso durar."
+        )
+        return None
+
+    bloco = ((dados.get("props") or {}).get("pageProps") or {}).get("initialJobList")
+    if not isinstance(bloco, dict):
+        logger.error(
+            "[Gupy] props.pageProps.initialJobList não existe mais no __NEXT_DATA__. "
+            "A página carrega, o JSON está lá, e a lista de vagas mudou de lugar."
+        )
+        return None
+
+    return bloco.get("pagination") or {}, bloco.get("data") or []
+
 
 # workplaceType da API -> vocabulario que o filtro ja usa (ver
 # _FLAGS_REMOTO e as regras de cidade em core/job.py).
@@ -111,7 +188,7 @@ def montar_job(vaga: dict) -> Job | None:
 
 
 class GupyScraper(BaseScraper):
-    """Busca vagas na API publica do portal da Gupy."""
+    """Busca vagas no portal da Gupy, lendo o __NEXT_DATA__ da pagina."""
 
     def __init__(self, termos_busca: list[str]):
         self.termos_busca = termos_busca
@@ -126,49 +203,63 @@ class GupyScraper(BaseScraper):
     def _buscar_termo(self, termo: str) -> list[Job]:
         logger.info(f"[Gupy] Buscando: {termo}")
         vagas: list[Job] = []
-        offset = 0
+        pagina = 1
         total = None
+        por_pagina = POR_PAGINA_PADRAO
 
-        while offset < MAX_VAGAS_POR_TERMO:
+        while True:
+            url = url_da_busca(termo, pagina)
             try:
-                resposta = requests.get(
-                    URL_API,
-                    params={"jobName": termo, "limit": LIMITE_POR_PAGINA, "offset": offset},
-                    timeout=TIMEOUT,
-                    headers={"User-Agent": UA},
-                )
+                resposta = requests.get(url, timeout=TIMEOUT, headers={"User-Agent": UA})
             except Exception as erro:
-                logger.error(f"[Gupy] Erro ao buscar '{termo}' (offset {offset}): {erro}")
+                logger.error(f"[Gupy] Erro ao buscar '{termo}' (página {pagina}): {erro}")
                 break
 
             if resposta.status_code != 200:
                 logger.warning(
-                    f"[Gupy] Status {resposta.status_code} em '{termo}' (offset {offset}) "
-                    "— resposta inesperada da API, não é busca vazia."
+                    f"[Gupy] Status {resposta.status_code} em '{termo}' (página {pagina}) "
+                    "— resposta inesperada do portal, não é busca vazia."
                 )
                 break
 
-            try:
-                dados = resposta.json()
-            except ValueError:
-                logger.warning(f"[Gupy] Resposta não-JSON em '{termo}' (offset {offset}).")
+            extraido = extrair_lista(resposta.text)
+            if extraido is None:
                 break
+            paginacao, lote = extraido
 
-            lote = dados.get("data") or []
             if total is None:
-                total = (dados.get("pagination") or {}).get("total", 0)
+                total = paginacao.get("total") or 0
                 if not total:
                     logger.info(f"[Gupy] 0 resultados reais para '{termo}'.")
                     break
+                por_pagina = paginacao.get("limit") or POR_PAGINA_PADRAO
+
+            # A guarda do ?offset=: ele responde 200, devolve 12 vagas e deixa
+            # o offset em 0 — a pagina 1 de novo, com cara de pagina 2. Sem
+            # conferir isso, o scraper leria a mesma pagina ate bater o teto e
+            # nada no log diria que havia algo errado.
+            offset_declarado = paginacao.get("offset")
+            offset_esperado = (pagina - 1) * por_pagina
+            if offset_declarado is not None and offset_declarado != offset_esperado:
+                logger.warning(
+                    f"[Gupy] '{termo}': pedi a página {pagina} (offset {offset_esperado}) "
+                    f"e o portal devolveu offset {offset_declarado}. A paginação mudou de "
+                    "forma; paro aqui pra não reler a mesma página como se fosse nova."
+                )
+                break
+
+            if not lote:
+                break
 
             for item in lote:
                 job = montar_job(item)
                 if job is not None:
                     vagas.append(job)
 
-            offset += LIMITE_POR_PAGINA
-            if not lote or offset >= total:
+            lidas = pagina * por_pagina
+            if lidas >= total or lidas >= MAX_VAGAS_POR_TERMO:
                 break
+            pagina += 1
             time.sleep(1)
 
         if total and total > MAX_VAGAS_POR_TERMO:
