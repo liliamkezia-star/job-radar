@@ -455,3 +455,37 @@ def test_sem_padroes_titulo_cai_pros_termos_de_busca():
     passar — mas o teste acima e que cobra o perfil passar."""
     s = itjobs.ITJobsScraper(["data analyst"])
     assert s.padroes_titulo == ["data analyst"]
+# --- a fiacao: o perfil TEM que passar os padroes de titulo --------------
+
+
+def test_o_perfil_internacional_passa_padroes_titulo():
+    """O teste acima prova que o scraper usa padroes_titulo quando recebe.
+    Este prova que ele RECEBE — e sao coisas diferentes: a fonte funcionaria
+    "normalmente" sem isso, so perdendo em silencio toda vaga de engenharia
+    de dados, que e o pior modo de falha desta base.
+
+    Instancia como o main.py instancia (classe(termos_busca=..., **kwargs)),
+    pra o teste quebrar se a fiacao mudar de forma."""
+    from core.config_intl import KEYWORDS_INTL
+    from core.perfis import PERFIL_INTL
+
+    definicoes = [d for d in PERFIL_INTL.definicao_scrapers
+                  if d.classe is itjobs.ITJobsScraper]
+    assert len(definicoes) == 1, "itjobs tem que estar ligado no perfil internacional"
+    definicao = definicoes[0]
+    assert definicao.kwargs_extras.get("padroes_titulo") is KEYWORDS_INTL
+
+    scraper = definicao.classe(termos_busca=["data analyst spanish speaker"],
+                               **definicao.kwargs_extras)
+    for titulo in ("Data Engineer", "Analytics Engineer", "Engenheiro de Dados"):
+        assert combina_com_algum_termo(titulo, scraper.padroes_titulo), titulo
+
+
+def test_o_itjobs_roda_em_frequencia_baixa():
+    """36 requisicoes de listagem + ate 80 de detalhe, 74s medidos. A validade
+    dos anuncios e de 30 dias, entao uma vez por dia nao perde nada."""
+    from core.perfis import FREQUENCIA_BAIXA, PERFIL_INTL
+
+    definicao = next(d for d in PERFIL_INTL.definicao_scrapers
+                     if d.classe is itjobs.ITJobsScraper)
+    assert definicao.frequencia == FREQUENCIA_BAIXA

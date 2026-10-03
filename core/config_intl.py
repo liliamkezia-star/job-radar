@@ -75,6 +75,22 @@ KEYWORDS_INTL = [
     "Data Analytics",
     "Data Specialist",
     "Analista de Dados",
+    # "Business Analyst" e cargo FORTE aqui e AMBIGUO no perfil Brasil (lá ele
+    # exige um qualificador de dados junto no título). A divergência é
+    # DECISÃO, confirmada pela usuária em 03/10/2026, e não esquecimento —
+    # até hoje ela não estava escrita em lugar nenhum, e divergência
+    # silenciosa entre os dois perfis já custou semanas neste projeto.
+    #
+    # MEDIDO no dia, com a fonte nova do itjobs.pt: das 13 vagas aprovadas,
+    # 10 eram Business Analyst — e várias de banco e trading ("Senior eForex
+    # Business Analyst", "Business Analyst – Front and Middle Office Trading
+    # Systems", "Medior Business Analyst – Financial Services & Calypso
+    # Expertise"). Alinhar com a regra do Brasil levaria essas 13 para 3.
+    #
+    # A usuária escolheu manter: Business Analyst em mercado lusófono/hispano
+    # interessa a ela. Se um dia incomodar, o conserto é mover esta entrada
+    # para KEYWORDS_CARGO_AMBIGUO_INTL — e aí o impacto é em TODAS as fontes
+    # internacionais, não só no itjobs.
     "Business Analyst",
     # Nomenclatura em espanhol
     "Analista de Datos",

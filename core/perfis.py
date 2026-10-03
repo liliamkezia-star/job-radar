@@ -52,6 +52,7 @@ from scrapers.geekhunter import GeekHunterScraper
 from scrapers.gupy import GupyScraper
 from scrapers.indeed import IndeedScraper
 from scrapers.indeed_intl import IndeedIntlScraper
+from scrapers.itjobs import ITJobsScraper
 from scrapers.jobs99 import Jobs99Scraper
 from scrapers.linkedin import LinkedInScraper
 from scrapers.linkedin_intl import LinkedInIntlScraper
@@ -318,6 +319,40 @@ _SCRAPERS_INTL = [
     # absoluto do ciclo internacional: 19 dos 25 minutos, zero vaga.
     # DefinicaoScraper(IndeedIntlScraper, FREQUENCIA_ALTA, {"dominios": DOMINIOS_INDEED_INTL}),
     DefinicaoScraper(WeWorkRemotelyIntlScraper, FREQUENCIA_ALTA),
+    # itjobs.pt — entra em 03/10/2026, depois de medir CINCO sites portugueses
+    # que a usuária pediu pra avaliar. Foi o único que passou:
+    #
+    #   itjobs.pt      568 vagas remotas, 36 páginas, 13 aprovadas de 16 que
+    #                  casaram os padrões de título — e 0 sem data, 0 sem
+    #                  modalidade, 0 sem link.
+    #   emprego.sapo   9 vagas alcançáveis (page=2 repete a 1), 0 aprovada
+    #   michaelpage    8 a 30 por rota, termo+remoto não combinam, 0 aprovada
+    #   randstad       30 vagas (page=2 repete a 1), 0 aprovada em 75 títulos
+    #   net-empregos   feed de 1.000 sem filtro, 15 de tecnologia, ~0
+    #
+    # É a ÚNICA fonte do projeto que lê schema.org/JobPosting — contrato, não
+    # marcação. E traz dois campos que nenhuma outra tem: datePosted sempre
+    # (contra 57,9% da base e 0% da GeekHunter) e validThrough, que já
+    # descartou 3 vagas encerradas na primeira rodada de rede.
+    #
+    # padroes_titulo=KEYWORDS_INTL e OBRIGATÓRIO, não enfeite: o site não
+    # combina termo com remoto, então o cruzamento é nosso, e os TERMOS de
+    # busca internacionais são frases qualificadas por idioma ("data engineer
+    # portuguese speaker") que nunca aparecem num título. Medido: com os
+    # termos, "Data Engineer" casava com NADA. Tem teste cobrando isto.
+    #
+    # FREQUENCIA_BAIXA: 36 requisições de listagem + até 80 de detalhe, 74s
+    # medidos. Uma vez por dia é suficiente — a validade dos anúncios é de 30
+    # dias, então nada se perde rodando diariamente.
+    #
+    # CRITÉRIO DE PERMANÊNCIA, escrito ANTES do primeiro resultado em produção
+    # (a repescagem da Sólides me ensinou isso: critério reescrito depois do
+    # resultado não é critério, é justificativa): descontada a CARGA INICIAL —
+    # as vagas que já estavam no site quando a fonte entrou, que vão chegar
+    # todas no primeiro ciclo e satisfariam qualquer critério —, se em 14 dias
+    # ela não trouxer 3 vagas inéditas aprovadas, sai.
+    DefinicaoScraper(ITJobsScraper, FREQUENCIA_BAIXA,
+                     {"padroes_titulo": KEYWORDS_INTL}),
 ]
 
 PERFIL_INTL = Perfil(
