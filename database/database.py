@@ -144,11 +144,39 @@ class BancoVazioSuspeito(RuntimeError):
     resetado. Ver iniciar_db()."""
 
 
+# Quando o banco NAO vem mais do repositorio (ver a saida do git em
+# .github/workflows/jobradar.yml), "arquivo ausente" deixa de significar
+# primeiro uso e passa a significar estado perdido — cache vazio, artifact
+# nao recuperado, caminho errado. A diferenca e grave: a guarda de banco
+# vazio abaixo so pega arquivo que EXISTIA com conteudo, entao arquivo
+# ausente passaria batido e as vagas todas seriam notificadas de novo, de
+# uma vez.
+#
+# Fica como variavel de ambiente, desligada por padrao, porque primeiro uso
+# de verdade existe (maquina nova, banco descartavel de teste) e nao pode
+# abortar. Quem liga e o workflow, que sabe que ali banco ausente e defeito.
+EXIGIR_BANCO_EXISTENTE = "JOBRADAR_EXIGIR_BANCO_EXISTENTE"
+
+
+def _exigindo_banco_existente() -> bool:
+    return os.getenv(EXIGIR_BANCO_EXISTENTE) == "1"
+
+
 def iniciar_db():
     # Precisa checar ANTES de conectar: sqlite3.connect() já cria um arquivo
     # vazio de 0 byte se o caminho não existir, o que destruiria o sinal que
     # queremos capturar (arquivo existia com conteúdo real vs. nunca existiu).
     arquivo_ja_existia = os.path.exists(DB_PATH) and os.path.getsize(DB_PATH) > 0
+
+    if _exigindo_banco_existente() and not arquivo_ja_existia:
+        raise BancoVazioSuspeito(
+            f"{DB_PATH} nao existe (ou esta vazio) e {EXIGIR_BANCO_EXISTENTE}=1 — "
+            "neste ambiente o banco vem do cache/artifact, nao do repositorio, "
+            "entao arquivo ausente e estado perdido e nao primeiro uso. Abortando "
+            "antes de rodar qualquer busca, pra nao notificar o banco inteiro como "
+            "se fosse novo. Pra recuperar: baixe o artifact jobradar-banco-* da "
+            "ultima execucao boa e restaure em data/jobs.db."
+        )
 
     with _conectar() as conn:
         conn.execute("""

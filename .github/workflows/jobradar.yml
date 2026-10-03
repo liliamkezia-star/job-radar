@@ -62,6 +62,69 @@ jobs:
           pip install -r requirements.txt
           python -m playwright install --with-deps chromium
 
+      # ===== ETAPA 1 DA SAIDA DO BANCO DO GIT (03/10/2026) =====
+      #
+      # PROBLEMA. data/jobs.db e versionado. Duas contas ja vieram disso:
+      #   · rodada local perde registro. O log mostra o Indeed Intl gravando
+      #     3, 5 e 5 vagas novas em rodadas na maquina da usuaria; nenhuma
+      #     esta no banco. `git checkout -- .` devolve o banco ao estado
+      #     commitado, e vaga ja avisada volta a ser inedita.
+      #   · o historico de busca dela mora num repositorio publico.
+      #
+      # POR QUE EM DUAS ETAPAS, e nao de uma vez. A guarda contra enxurrada
+      # (BancoVazioSuspeito, em database/database.py) so dispara quando o
+      # arquivo EXISTIA com conteudo e a tabela veio vazia. Arquivo ausente
+      # ela entende como primeiro uso, e segue. Hoje isso nunca acontece
+      # porque o git clone sempre traz o banco — tirar o banco do git tira
+      # essa garantia junto. Se o cache estiver vazio na primeira execucao
+      # depois da troca, as 3.559 vagas do banco viram "novas" de uma vez.
+      #
+      # Entao esta etapa NAO muda comportamento nenhum: ela semeia o cache e
+      # MEDE se ele volta. O banco continua vindo do git e continua sendo
+      # commitado, exatamente como antes. A troca de verdade (git rm
+      # --cached, guarda estrita, fim do passo de commit) so acontece depois
+      # de um ciclo provar que o cache acerta e traz o mesmo numero de vagas.
+      #
+      # estado/jobs.db e caminho SEPARADO de data/jobs.db de proposito: se os
+      # dois fossem o mesmo, a restauracao do cache sobrescreveria o banco do
+      # repositorio e esta etapa deixaria de ser inofensiva.
+      - name: "Restaurar o cache do banco (etapa 1 — so medicao)"
+        id: cache-do-banco
+        uses: actions/cache/restore@v4
+        with:
+          path: estado/jobs.db
+          key: jobs-db-${{ github.run_id }}
+          restore-keys: jobs-db-
+
+      - name: Comparar o banco do cache com o do repositorio
+        run: |
+          echo "cache-hit        : ${{ steps.cache-do-banco.outputs.cache-hit }}"
+          echo "chave encontrada : ${{ steps.cache-do-banco.outputs.cache-matched-key }}"
+          python - <<'PY'
+          import os, sqlite3
+
+          def contar(caminho):
+              if not os.path.exists(caminho) or os.path.getsize(caminho) == 0:
+                  return "ausente ou vazio"
+              try:
+                  with sqlite3.connect(caminho) as conexao:
+                      return conexao.execute("SELECT COUNT(*) FROM vagas_vistas").fetchone()[0]
+              except Exception as erro:
+                  return f"erro ao abrir: {erro}"
+
+          do_git = contar("data/jobs.db")
+          do_cache = contar("estado/jobs.db")
+          print(f"vagas no banco do repositorio: {do_git}")
+          print(f"vagas no banco do cache      : {do_cache}")
+          if do_cache == "ausente ou vazio":
+              print("LEITURA: cache ainda nao semeado (esperado na primeira execucao).")
+          elif do_git == do_cache:
+              print("LEITURA: cache em dia. A etapa 2 pode ir.")
+          else:
+              print("LEITURA: os dois DIVERGEM. Investigar ANTES da etapa 2 — "
+                    "trocar pelo cache agora renotificaria a diferenca.")
+          PY
+
       - name: Rodar JobRadar (um ciclo de cada perfil)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -88,6 +151,46 @@ jobs:
           name: jobradar-log-${{ github.run_number }}
           path: jobradar.log
           retention-days: 14
+          if-no-files-found: warn
+
+      # Copia pro caminho do cache em vez de cachear data/jobs.db direto: ver
+      # o comentario da etapa 1. Enquanto os dois caminhos forem separados,
+      # restaurar o cache nao pode atropelar o banco do repositorio.
+      - name: Semear o cache com o banco deste ciclo
+        id: semear
+        if: always()
+        run: |
+          mkdir -p estado
+          if [ -f data/jobs.db ]; then
+            cp data/jobs.db estado/jobs.db
+            echo "banco copiado pro cache ($(stat -c%s estado/jobs.db) bytes)"
+            echo "tem_banco=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "data/jobs.db nao existe ao fim do ciclo — nada a semear."
+            echo "tem_banco=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Guardar o cache do banco
+        # So quando ha arquivo: actions/cache/save ERRA quando o caminho nao
+        # existe, e com if: always() isso derrubaria o job inteiro por causa
+        # de um ciclo que nem chegou a criar banco.
+        if: always() && steps.semear.outputs.tem_banco == '1'
+        uses: actions/cache/save@v4
+        with:
+          path: estado/jobs.db
+          key: jobs-db-${{ github.run_id }}
+
+      # Rede de seguranca independente do cache: cache do GitHub e descartavel
+      # (expira sozinho, e pode ser limpo pela interface). O artifact aqui e o
+      # que permite RECUPERAR o banco se o cache sumir, em vez de recomecar com
+      # banco vazio — que e justamente o cenario de enxurrada de notificacao.
+      - name: Guardar o banco como artifact (recuperacao)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jobradar-banco-${{ github.run_number }}
+          path: data/jobs.db
+          retention-days: 30
           if-no-files-found: warn
 
       - name: Salvar vagas já vistas (evita notificação duplicada)

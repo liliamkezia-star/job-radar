@@ -8,3 +8,6 @@ data/*.db-journal
 data/*.db-wal
 data/*.db-shm
 _to_delete/
+
+# Caminho do banco cacheado no GitHub Actions (ver o workflow).
+estado/
