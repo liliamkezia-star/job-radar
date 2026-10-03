@@ -165,7 +165,14 @@ def test_intl_remoto_sem_mercado_declarado_exige_idioma_no_titulo():
     ("Analista de Power BI", True),            # ferramenta + cargo
     ("Desenvolvedor Power BI", False),         # ferramenta sem cargo de analise
     ("Vendedor Externo", False),
-    ("Engenheiro de Dados", False),
+    # 03/10/2026: era False. A usuária pediu engenharia de dados no radar,
+    # e três cargos entraram em KEYWORDS_CARGO_FORTE. A reversão é estreita:
+    # ver as duas linhas seguintes, que continuam False.
+    ("Engenheiro de Dados", True),
+    ("Data Engineer", True),
+    ("Analytics Engineer", True),
+    ("Engenheiro de Software", False),       # abrir engenharia de dados
+    ("Data Engineering Manager", False),    # não é abrir engenharia
 ])
 def test_cargo_no_titulo(titulo, esperado):
     assert _vaga(titulo, "Recife - PE", "Presencial").combina_com(PERFIL_BR.regras) is esperado

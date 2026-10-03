@@ -84,11 +84,29 @@ def test_data_center_analyst_e_o_ruido_conhecido():
 @pytest.mark.parametrize("titulo", [
     "Analista de Banco de Dados",          # DBA: decisão da usuária, 22/08
     "SAP BW/HANA Datasphere Developer",    # dev: exclusão de projeto
-    "Analytics Engineer",                  # engenharia: mesma exclusão
     "Oracle Fusion Reporting Lead",        # liderança
 ])
 def test_o_que_foi_deixado_de_fora_continua_fora(titulo):
     assert not _vaga(titulo).combina_com(REGRAS)
+
+
+def test_engenharia_de_dados_SAIU_desta_lista_em_03_10_2026():
+    """"Analytics Engineer" estava acima, com o comentário "engenharia: mesma
+    exclusão". A usuária pediu a reversão em 03/10/2026 e entraram três
+    cargos em KEYWORDS_CARGO_FORTE: Engenheiro de Dados, Data Engineer e
+    Analytics Engineer.
+
+    Este teste existe no lugar do assert que saiu, e não em vez dele: a
+    decisão antiga era da usuária, a nova também, e apagar o assert
+    transformaria a troca num acidente. O que ele guarda é que a reversão foi
+    ESTREITA — três frases de cargo, não a palavra "engenheiro"."""
+    assert _vaga("Analytics Engineer").combina_com(REGRAS)
+    assert _vaga("Engenheiro de Dados").combina_com(REGRAS)
+    assert _vaga("Data Engineer").combina_com(REGRAS)
+    # e a vizinhança da lista acima continua intacta
+    assert not _vaga("Engenheiro de Software").combina_com(REGRAS)
+    assert not _vaga("Engenheiro de Power BI").combina_com(REGRAS)
+    assert not _vaga("Data Engineering Manager").combina_com(REGRAS)
 
 
 def test_especialista_nao_entrou_na_lista():

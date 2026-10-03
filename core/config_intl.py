@@ -93,6 +93,22 @@ KEYWORDS_INTL = [
     "AI Trainer",
     "Data Labeler",
     "Search Quality Rater",
+    # Engenharia de dados, pedida pela usuária em 03/10/2026. Espelha o
+    # que entrou em KEYWORDS_CARGO_FORTE (core/config.py) — deixar os dois
+    # perfis diferentes aqui recriaria exatamente a divergência silenciosa
+    # que fez o perfil internacional ficar sem mecanismo por semanas.
+    #
+    # Entra como FILTRO. O termo de BUSCA internacional é outra lista e tem
+    # regra própria (ver TERMOS_BUSCA_INTL abaixo: cargo sozinho aqui é o
+    # mundo inteiro sem filtro de idioma), então não é simétrico ao perfil
+    # BR, onde TERMOS_CARGO é derivado de KEYWORDS automaticamente.
+    #
+    # Sem esta entrada, a vaga "Data Engineer" que o itjobs.pt e o
+    # LinkedIn Intl encontram seria reprovada SÓ PELO CARGO — medido em
+    # 03/10 nos dois perfis, antes de mexer.
+    "Engenheiro de Dados",
+    "Data Engineer",
+    "Analytics Engineer",
 ]
 
 # Termos de busca: cargo + sinal de idioma (português/espanhol/bilíngue) ou
@@ -111,6 +127,15 @@ TERMOS_BUSCA_INTL = [
     "business intelligence portuguese speaker",
     "business intelligence portuguese speaking",
     "remote data analyst latam",
+    # Engenharia de dados, 03/10/2026. Com sinal de idioma/mercado porque a
+    # regra desta lista está escrita acima: cargo sozinho aqui é "o mundo
+    # inteiro sem filtro nenhum de idioma". "data engineer" puro traria
+    # vaga global que o filtro de mercado reprova depois — custo de
+    # requisição com ganho zero, que é o erro que esta lista evita por
+    # desenho.
+    "data engineer portuguese speaker",
+    "data engineer spanish speaker",
+    "remote data engineer latam",
     "remote data analyst latin america",
     "data analyst spanish market",
     "business intelligence spanish markets",

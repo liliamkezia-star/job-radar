@@ -43,6 +43,27 @@ KEYWORDS_CARGO_FORTE = [
     # LinkedInScraper já busca em Argentina/Chile (ver LOCATIONS_LINKEDIN).
     "Analista de Datos",
     "Analítica de Datos",
+    # Engenharia de dados, pedida pela usuária em 03/10/2026.
+    #
+    # POR QUE ENTRA AQUI E NÃO SÓ EM TERMOS_BUSCA: as duas listas são
+    # diferentes de propósito (ver o comentário de TERMOS_BUSCA). Medido
+    # antes de mexer: "Engenheiro de Dados", "Data Engineer" e "Analytics
+    # Engineer" reprovavam SÓ PELO CARGO nos dois perfis. Acrescentar o
+    # termo de busca sem a keyword traria a vaga e o filtro jogaria fora —
+    # custo de ciclo com ganho zero.
+    #
+    # EFEITO COLATERAL MEDIDO (simulação contra os dois perfis, antes de
+    # escrever): nenhum. _contem_termo casa por palavra inteira, então
+    # continuam reprovando "Data Engineering Manager", "Head of Data
+    # Engineering", "Analytics Engineering Lead", "Gerente de Engenharia de
+    # Dados", "Engenheiro de Software", "Engenheiro Civil", "Engenheiro de
+    # Produção", "Engenheiro de Machine Learning", "Data Platform Engineer",
+    # "Site Reliability Engineer" e "DevOps Engineer". Se um dia alguma
+    # dessas passar a ser desejada, ela precisa de entrada PRÓPRIA — não de
+    # uma keyword mais curta tipo "engineer", que arrastaria as outras dez.
+    "Engenheiro de Dados",
+    "Data Engineer",
+    "Analytics Engineer",
 ]
 
 # Cargo ambíguo: título que também é usado em vaga sem nada a ver com
@@ -110,6 +131,15 @@ FERRAMENTAS_TITULO = [
 # Palavra de cargo que confirma que a vaga de ferramenta é de análise.
 # "desenvolvedor"/"developer"/"engenheiro" ficam FORA de propósito: é o que
 # mantém vaga de dev fora do radar.
+#
+# Isto continua valendo depois de 03/10/2026, quando "Engenheiro de Dados",
+# "Data Engineer" e "Analytics Engineer" entraram em KEYWORDS_CARGO_FORTE. A
+# diferença é o CAMINHO: aquelas três são cargo forte, batem sozinhas pelo
+# título inteiro. "engenheiro" como QUALIFICADOR abriria o caminho
+# ferramenta+cargo, e aí "Engenheiro de Power BI" entraria — que é vaga de
+# desenvolvimento, não de análise. Medido depois da mudança: "Engenheiro de
+# Power BI", "Desenvolvedor Power BI" e "Engenheiro de Software" continuam
+# reprovando. Abrir engenharia de DADOS não é abrir engenharia.
 QUALIFICADORES_CARGO = [
     "analista",
     "analyst",
