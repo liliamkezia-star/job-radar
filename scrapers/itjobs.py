@@ -158,11 +158,13 @@ def local_da_vaga(jp: dict) -> str:
     """"Cidade, Portugal" quando o endereco diz a cidade; "Portugal" quando
     nao diz.
 
-    addressLocality NAO foi confirmado no dado real — a sondagem truncou o
-    endereco no postalCode. Por isso a reserva: na pior hipotese o local sai
+    CONFIRMADO na verificacao de rede de 03/10/2026, que imprimiu o endereco
+    inteiro: {"@type": "PostalAddress", "postalCode": "4000-008",
+    "addressLocality": "Porto", "addressRegion": "Porto", "addressCountry":
+    "PT"}. As 13 vagas do teste sairam com "Porto, Portugal" e "Lisboa,
+    Portugal". A reserva fica: quando o endereco nao diz a cidade o local sai
     "Portugal", que e o que o filtro internacional precisa (mercado lusofono),
-    e nunca sai errado. testar_itjobs_rede.py imprime o endereco inteiro pra
-    confirmar a chave."""
+    e nunca sai errado."""
     locais = (jp or {}).get("jobLocation")
     if isinstance(locais, dict):
         locais = [locais]
@@ -218,23 +220,48 @@ def montar_job(titulo_da_listagem: str, link: str, jp: dict,
     )
 
 
-def combina_com_algum_termo(titulo: str, termos: list[str]) -> bool:
-    """Pre-filtro de termo, dentro do scraper, porque o site NAO combina termo
-    com remoto: /emprego/remote?q=data devolveu a lista sem o q (medido). As
-    outras fontes pedem o termo ao site; aqui o cruzamento tem que ser nosso.
+def combina_com_algum_termo(titulo: str, padroes: list[str]) -> bool:
+    """Pre-filtro, dentro do scraper, porque o site NAO combina termo com
+    remoto: /emprego/remote?q=data devolveu a lista sem o q (medido). As outras
+    fontes pedem o termo ao site; aqui o cruzamento tem que ser nosso.
+
+    O QUE ENTRA EM `padroes` IMPORTA, e eu errei isso na primeira versao.
+    Passei os TERMOS DE BUSCA do perfil, e no internacional eles sao frases
+    qualificadas por idioma ("data engineer portuguese speaker") porque a
+    lista de la exige isso. Nenhum titulo de vaga contem essa frase. Medido na
+    verificacao de rede de 03/10:
+
+        "Data Engineer"        -> nenhum termo casou
+        "Analytics Engineer"   -> nenhum termo casou
+        "Engenheiro de Dados"  -> nenhum termo casou
+
+    Das 30 entradas da lista, so tres eram curtas o bastante pra casar titulo
+    (business analyst, data analyst, business intelligence) — e foram elas que
+    trouxeram as 13 vagas daquele teste. O resultado parecia otimo e era em
+    parte acidente.
+
+    A lista certa e a de KEYWORDS: elas sao PADRAO DE TITULO, que e o que se
+    cruza aqui, enquanto termo de busca e consulta a site. Por isso o scraper
+    recebe `padroes_titulo` separado, e o perfil passa KEYWORDS_INTL.
 
     Deliberadamente FROUXO (substring normalizada): quem decide de verdade e
-    o filtro de tres niveis em core/job.py. Aqui so se evita abrir 630 paginas
+    o filtro de tres niveis em core/job.py. Aqui so se evita abrir 568 paginas
     de detalhe."""
     alvo = _normalizar(titulo or "")
-    return any(_normalizar(t) in alvo for t in (termos or []) if t)
+    return any(_normalizar(p) in alvo for p in (padroes or []) if p)
 
 
 class ITJobsScraper(BaseScraper):
     """Busca vaga remota no https://www.itjobs.pt/emprego/remote."""
 
-    def __init__(self, termos_busca: list[str]):
+    def __init__(self, termos_busca: list[str],
+                 padroes_titulo: list[str] | None = None):
         self.termos_busca = termos_busca
+        # Ver combina_com_algum_termo: o cruzamento quer PADRAO DE TITULO
+        # (KEYWORDS), nao consulta de site (TERMOS_BUSCA). A reserva mantem o
+        # scraper funcional se o perfil nao passar nada — mas o perfil deve
+        # passar, e tem teste cobrando.
+        self.padroes_titulo = padroes_titulo or termos_busca
 
     def buscar_vagas(self) -> list[Job]:
         candidatas = self._colher_listagem()
@@ -289,10 +316,10 @@ class ITJobsScraper(BaseScraper):
     def _abrir_detalhes(self, candidatas: list[tuple[str, str]]) -> list[Job]:
         """Abre a página da vaga só do que casou com algum termo de busca."""
         casaram = [(t, l) for t, l in candidatas
-                   if combina_com_algum_termo(t, self.termos_busca)]
+                   if combina_com_algum_termo(t, self.padroes_titulo)]
         logger.info(
             f"[ITJobs] {len(casaram)} de {len(candidatas)} título(s) casaram com "
-            f"os {len(self.termos_busca)} termo(s) deste ciclo."
+            f"os {len(self.padroes_titulo)} padrão(ões) de título."
         )
         if len(casaram) > MAX_DETALHES_POR_CICLO:
             logger.warning(

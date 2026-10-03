@@ -390,3 +390,68 @@ def test_listagem_fora_do_ar_nao_derruba_o_ciclo(site, caplog):
     site({})
     assert itjobs.ITJobsScraper(["data analyst"]).buscar_vagas() == []
     assert "não é busca vazia" in caplog.text
+# --- a lista do cruzamento: o erro que a verificacao de rede pegou --------
+#
+# MEDIDO em 03/10/2026, na primeira verificacao de rede desta fonte. Eu
+# passava os TERMOS DE BUSCA do perfil pro cruzamento. No internacional eles
+# sao frases qualificadas por idioma, porque a lista de la exige isso — e
+# nenhum titulo de vaga contem a frase "data engineer portuguese speaker".
+# Resultado: dos 30 termos, so tres eram curtos o bastante pra casar titulo, e
+# os tres cargos que a usuaria tinha acabado de pedir casavam com NADA.
+#
+# O 13 de 13 aprovadas daquele teste parecia otimo e era em parte acidente.
+
+
+def test_termo_de_busca_internacional_nao_serve_pro_cruzamento():
+    """O erro, preso em teste com as DUAS listas reais do projeto."""
+    from core.config_intl import TERMOS_BUSCA_INTL
+
+    assert not combina_com_algum_termo("Data Engineer", TERMOS_BUSCA_INTL)
+    assert not combina_com_algum_termo("Analytics Engineer", TERMOS_BUSCA_INTL)
+    assert not combina_com_algum_termo("Engenheiro de Dados", TERMOS_BUSCA_INTL)
+
+
+def test_keywords_internacionais_servem_pro_cruzamento():
+    """A lista certa: KEYWORDS sao PADRAO DE TITULO; termo de busca e consulta
+    a site. Com a lista certa, os tres cargos pedidos em 03/10 casam."""
+    from core.config_intl import KEYWORDS_INTL
+
+    for titulo in ("Data Engineer", "Analytics Engineer", "Engenheiro de Dados",
+                   "Senior Data Engineer - Dataiku, Power BI, SQL, Python",
+                   "Data Analyst - Data Governance"):
+        assert combina_com_algum_termo(titulo, KEYWORDS_INTL), titulo
+
+
+def test_o_scraper_usa_padroes_titulo_quando_recebe(site):
+    """E o perfil TEM que passar. Sem isto a fonte perderia silenciosamente
+    toda vaga de engenharia de dados — o pior tipo de falha desta base."""
+    pagina = _listagem([("Data Engineer", "/oferta/1/data-engineer")], ultima=1)
+    s = site({
+        "https://www.itjobs.pt/emprego/remote": pagina,
+        "https://www.itjobs.pt/oferta/1/data-engineer": _pagina_de_vaga(
+            dict(JSONLD_REAL, title="Data Engineer", validThrough="2099-01-01")),
+    })
+    # com os termos qualificados do perfil internacional: nao acha
+    vagas = itjobs.ITJobsScraper(["data engineer portuguese speaker"]).buscar_vagas()
+    assert vagas == []
+    assert "https://www.itjobs.pt/oferta/1/data-engineer" not in s.pedidos
+
+    # com os padroes de titulo: acha
+    s2 = site({
+        "https://www.itjobs.pt/emprego/remote": pagina,
+        "https://www.itjobs.pt/oferta/1/data-engineer": _pagina_de_vaga(
+            dict(JSONLD_REAL, title="Data Engineer", validThrough="2099-01-01")),
+    })
+    vagas = itjobs.ITJobsScraper(
+        ["data engineer portuguese speaker"], padroes_titulo=["Data Engineer"]
+    ).buscar_vagas()
+    assert len(vagas) == 1
+    assert vagas[0].titulo == "Data Engineer"
+    assert "https://www.itjobs.pt/oferta/1/data-engineer" in s2.pedidos
+
+
+def test_sem_padroes_titulo_cai_pros_termos_de_busca():
+    """A reserva existe pra o scraper nao ficar mudo se o perfil esquecer de
+    passar — mas o teste acima e que cobra o perfil passar."""
+    s = itjobs.ITJobsScraper(["data analyst"])
+    assert s.padroes_titulo == ["data analyst"]
