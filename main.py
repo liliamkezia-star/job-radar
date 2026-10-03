@@ -239,6 +239,24 @@ def _enviar_digest_diario(perfil: Perfil):
 # depois 0. Com limiar 1 ou 2 ela dispararia alerta sem ter problema -- fonte
 # pequena tem dia fraco. A Gupy voltou 0 nos TRES, e e essa que precisa
 # avisar. 3 separa os dois casos com folga.
+#
+# O QUE ACONTECEU DEPOIS, em producao (03/10) -- e vale mais que o paragrafo
+# acima, porque e a primeira vez que este alerta disparou de verdade:
+#
+#   03:54 do ciclo 394 -- "WeWorkRemotelyIntlScraper esta sem trazer vaga ha 3
+#   ciclos seguidos". As 11:21 do ciclo 395 ela voltou com 4 vagas.
+#
+# Ou seja: o alerta cumpriu a especificacao e a especificacao e que estava
+# apertada pra esta fonte. O limiar 3 foi calibrado na morte da Gupy, que traz
+# centenas por ciclo; a WeWorkRemotely traz 4 num dia bom e 0 nos outros, e
+# pra ela tres ciclos vazios seguidos e rotina. O paragrafo acima usou 0-4-0
+# como prova de que 3 bastava, e 0-4-0 so nao bateu 3 por sorte da amostra.
+#
+# DECISAO DA USUARIA, 03/10: fica como esta. Entao o numero 3 continua, e este
+# bloco existe pra que o proximo alerta da WeWorkRemotely seja reconhecido
+# como esperado em vez de investigado do zero. Se um dia incomodar, o conserto
+# ja esta desenhado: limiar por fonte, maior pras de FREQUENCIA_BAIXA, com o
+# numero tirado do historico de cada uma.
 CICLOS_ZERADOS_PRA_ALERTAR = 3
 
 
