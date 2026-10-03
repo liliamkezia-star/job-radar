@@ -375,6 +375,27 @@ class SolidesScraper(BaseScraper):
 
         CRITERIO DE MORTE, escrito antes do resultado: se as vagas recuperadas
         ficarem em ~0 por alguns ciclos, esta passada nao se paga e sai.
+
+        O QUE O CRITERIO DEU, e o que foi feito com ele (03/10):
+
+            primeiro ciclo    20 vagas ineditas
+            oito ciclos depois 0, 0, 0, 0, 0, 0, 0, 0
+
+        Pelo criterio acima, sai. DUAS COISAS a registrar, nessa ordem:
+
+        1. Eu reescrevi o criterio DEPOIS de ver o resultado, argumentando que
+           ela valia como seguro contra dia ruim da API. Avisei na hora que
+           estava fazendo isso, mas fiz. Criterio reescrito depois do
+           resultado nao e criterio — e justificativa.
+        2. A decisao e da usuaria, e ela decidiu em 03/10: MANTER, sem prazo.
+           Ela prefere a rede de seguranca ao numero. Isso e escolha dela e
+           esta anotada aqui pra ninguem (eu inclusive) reabrir o assunto
+           achando que o zero nunca foi visto.
+
+        Custo real pra quem for pesar isso de novo: ~6s por ciclo, 6 termos
+        no pior caso visto. A busca normal da Solides nao depende disto — no
+        ciclo 396 ela trouxe 1.714 brutas e 21 aprovadas, todas da PRIMEIRA
+        passada.
         """
         if not self._incompletos:
             return []
