@@ -198,6 +198,50 @@ _MERCADOS_REMOTO = {
     "cabo verde": "Cabo Verde",
 }
 
+
+# MEDIDO: nome de estado brasileiro escrito POR EXTENSO nao estava mapeado
+# como mercado. So a sigla resolvia ("- PB"), e alguns nomes de cidade. Com
+# modalidade=Remoto, hoje:
+#
+#   "Campina Grande, Paraiba"    -> {"campina grande paraiba"}
+#   "Joinville, Santa Catarina"  -> {"joinville santa catarina"}
+#   "Uberlandia, Minas Gerais"   -> {"uberlandia minas gerais"}
+#
+# Escopo nao mapeado nao e tratado como "sem restricao" (isso seria conjunto
+# vazio) e sim como "declarou um mercado que nao esta na lista aceita" -- ver
+# o MEDIDO em _mercados_correspondentes e RegrasFiltro.mercados_remoto_aceitos.
+# Ou seja: vaga REMOTA brasileira, com o cargo certo, e descartada por
+# localizacao dependendo apenas de a fonte escrever "PB" ou "Paraiba".
+#
+# ALCANCE: a API da Gupy manda o estado por extenso -- o proprio
+# tests/test_gupy_api.py parametriza com ("Curitiba", "Parana", "remote").
+# Em sonda ao vivo (1.079 vagas brutas de Gupy+Solides, termos "analista de
+# dados"/"analista de bi"/"power bi") este caminho NAO disparou, porque a
+# Gupy deixa `local` vazio na vaga remota e a Solides manda sigla. Entao e
+# falha latente, nao perda medida em producao -- mas basta a Gupy passar a
+# preencher local em vaga remota (ou outra fonte entrar escrevendo por
+# extenso) pra virar perda silenciosa.
+#
+# NAO conflita com _SIGLAS_UF_AMBIGUAS: a ambiguidade com estado dos EUA
+# existe na SIGLA de duas letras (AL, MA, MT, MS, PA, SC). Escrito por
+# extenso nao ha colisao -- nao existe estado americano chamado "Santa
+# Catarina" --, entao a regra conservadora de "so capital vence a sigla"
+# continua valendo intacta pro caminho da sigla.
+_ESTADOS_BRASIL_POR_EXTENSO = [
+    "acre", "alagoas", "amapa", "amazonas", "bahia", "ceara",
+    "distrito federal", "espirito santo", "goias", "maranhao",
+    "mato grosso", "mato grosso do sul", "minas gerais", "para", "paraiba",
+    "parana", "pernambuco", "piaui", "rio de janeiro", "rio grande do norte",
+    "rio grande do sul", "rondonia", "roraima", "santa catarina",
+    "sao paulo", "sergipe", "tocantins",
+]
+
+# setdefault, nao atribuicao: chave que ja exista (ex: "sao paulo", que pode
+# estar como cidade-mercado) mantem o que o dicionario original decidiu.
+for _estado in _ESTADOS_BRASIL_POR_EXTENSO:
+    _MERCADOS_REMOTO.setdefault(_estado, "Brasil")
+
+
 # MEDIDO: "Remoto (Porto Alegre, RS)" e "Remoto (Santiago do Cacém)"
 # viravam Portugal/Chile — a chave "porto" batia via \bporto\b dentro de
 # "porto alegre" (busca por substring/palavra do _mercado_correspondente),
